@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "246595712286",
+    "project_id": "quicktap-8bc03",
+    "storage_bucket": "quicktap-8bc03.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:246595712286:android:06ab93c0a790f8ad10c50f",
+        "android_client_info": {
+          "package_name": "com.example.quicktap"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCoHq0pBQHcaq3LA8OlFAqaz_YOWjBfT7o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
+

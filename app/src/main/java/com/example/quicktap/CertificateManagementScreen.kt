@@ -1,4 +1,4 @@
-package com.example.quicktap.dashboard.staff
+package com.example.quicktap
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -6,7 +6,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.WorkspacePremium
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,7 +20,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.quicktap.AppSettingsState
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
 import java.io.File
@@ -29,16 +32,22 @@ import java.util.Locale
 fun CertificateManagementScreen(
     workshopId: String = "WORKSHOP_001",
     onBackClick: () -> Unit,
-    onAutoGenerateClick: () -> Unit
+    onAutoGenerateClick: () -> Unit,
+    onHomeClick: () -> Unit = {},
+    onReportClick: () -> Unit = {},
+    onCertificateClick: () -> Unit = {},
+    onSettingsClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val firestore = FirebaseFirestore.getInstance()
 
-    val eligibleStudents = remember { mutableStateMapOf<String, Pair<String, String>>() }
+    // Map: studentFirebaseUid -> Triple(fullName, matrixNumber, certificateStatus)
+    val eligibleStudents = remember { mutableStateMapOf<String, Triple<String, String, String>>() }
     var dynamicWorkshopName by remember { mutableStateOf("Loading...") }
     var dynamicWorkshopDate by remember { mutableStateOf("2026") }
     var dynamicWorkshopTime by remember { mutableStateOf("10:00 AM") }
     var dynamicOrganizerName by remember { mutableStateOf("QuickTap Organizer") }
+    var bottomNavIndex by remember { mutableIntStateOf(2) } // Indeks 2 untuk Sijil
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -50,6 +59,11 @@ fun CertificateManagementScreen(
     val sentText = if (currentLang == "ms") "Hantar" else "Sent"
     val actionSendText = if (currentLang == "ms") "Hantar" else "Send"
     val autoGenText = if (currentLang == "ms") "Jana Semua Secara Automatik" else "Auto Generate All"
+
+    val navHomeLabel = if (currentLang == "ms") "Utama" else "Home"
+    val navReportLabel = if (currentLang == "ms") "Laporan" else "Report"
+    val navCertLabel = if (currentLang == "ms") "Sijil" else "Certificate"
+    val navSettingsLabel = if (currentLang == "ms") "Tetapan" else "Settings"
 
     val certGenSnackbar = if (currentLang == "ms") "Sijil terperinci dijana untuk " else "Detailed certificate generated for "
     val successGenSnackbar1 = if (currentLang == "ms") "Berjaya menjana " else "Successfully generated "
@@ -85,6 +99,7 @@ fun CertificateManagementScreen(
 
                 querySnapshot.documents.forEach { doc ->
                     val sId = doc.getString("studentId") ?: doc.getString("userId") ?: doc.id
+                    val matrix = doc.getString("studentNumber") ?: doc.getString("studentIdNum") ?: "-"
 
                     // Ambil nama sebenar yang disimpan dari proses check-in NFC
                     val rawName = doc.getString("studentName") ?: doc.getString("userName") ?: doc.getString("name") ?: ""
@@ -102,7 +117,7 @@ fun CertificateManagementScreen(
 
                     if (hasCheckedIn && hasCheckedOut && sId.isNotEmpty()) {
                         val displayStatus = if (existingStatus == "Sent") "Sent" else "Completed"
-                        eligibleStudents[sId] = Pair(name, displayStatus)
+                        eligibleStudents[sId] = Triple(name, matrix, displayStatus)
                     }
                 }
             }
@@ -115,11 +130,67 @@ fun CertificateManagementScreen(
                 title = { Text(titleText, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp) },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF912323))
             )
+        },
+        bottomBar = {
+            NavigationBar(containerColor = Color(0xFF912323)) {
+                NavigationBarItem(
+                    icon = { Icon(Icons.Default.Home, contentDescription = navHomeLabel) },
+                    label = { Text(navHomeLabel, fontSize = 11.sp, color = Color.White) },
+                    selected = bottomNavIndex == 0,
+                    onClick = { bottomNavIndex = 0; onHomeClick() },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color.White,
+                        unselectedIconColor = Color.White,
+                        selectedTextColor = Color.White,
+                        unselectedTextColor = Color.White,
+                        indicatorColor = Color.Transparent
+                    )
+                )
+                NavigationBarItem(
+                    icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = navReportLabel) },
+                    label = { Text(navReportLabel, fontSize = 11.sp, color = Color.White) },
+                    selected = bottomNavIndex == 1,
+                    onClick = { bottomNavIndex = 1; onReportClick() },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color.White,
+                        unselectedIconColor = Color.White,
+                        selectedTextColor = Color.White,
+                        unselectedTextColor = Color.White,
+                        indicatorColor = Color.Transparent
+                    )
+                )
+                NavigationBarItem(
+                    icon = { Icon(Icons.Default.WorkspacePremium, contentDescription = navCertLabel) },
+                    label = { Text(navCertLabel, fontSize = 11.sp, color = Color.White) },
+                    selected = bottomNavIndex == 2,
+                    onClick = { bottomNavIndex = 2; onCertificateClick() },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color.White,
+                        unselectedIconColor = Color.White,
+                        selectedTextColor = Color.White,
+                        unselectedTextColor = Color.White,
+                        indicatorColor = Color.Transparent
+                    )
+                )
+                NavigationBarItem(
+                    icon = { Icon(Icons.Default.Settings, contentDescription = navSettingsLabel) },
+                    label = { Text(navSettingsLabel, fontSize = 11.sp, color = Color.White) },
+                    selected = bottomNavIndex == 3,
+                    onClick = { bottomNavIndex = 3; onSettingsClick() },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color.White,
+                        unselectedIconColor = Color.White,
+                        selectedTextColor = Color.White,
+                        unselectedTextColor = Color.White,
+                        indicatorColor = Color.Transparent
+                    )
+                )
+            }
         }
     ) { paddingValues ->
         Column(
@@ -145,7 +216,8 @@ fun CertificateManagementScreen(
                 ) {
                     eligibleStudents.forEach { (studentId, data) ->
                         val name = data.first
-                        val status = data.second
+                        val matrix = data.second
+                        val status = data.third
 
                         Card(
                             colors = CardDefaults.cardColors(containerColor = cardContainerColor),
@@ -162,64 +234,58 @@ fun CertificateManagementScreen(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(name, fontWeight = FontWeight.Medium, fontSize = 16.sp, color = textColor)
-                                    Text("ID: $studentId", fontSize = 14.sp, color = secondaryTextColor)
+                                    Text("ID: $matrix", fontSize = 14.sp, color = secondaryTextColor)
                                 }
-                                Text(
-                                    text = if (status == "Sent") sentText else status,
-                                    color = if (status == "Sent") Color(0xFF2E7D32) else secondaryTextColor,
-                                    fontSize = 14.sp
-                                )
+                                
+                                val isSent = status == "Sent"
 
                                 Button(
                                     onClick = {
                                         val safeName = if (name.isNotBlank()) name else "Pelajar"
-                                        val pdfFile = File(context.getExternalFilesDir(null), "Certificate_${studentId}.pdf")
+                                        val fileName = "Cert_${safeName.replace(" ", "_")}_${matrix}.pdf"
+                                        val tempFile = File(context.cacheDir, fileName)
 
-                                        // Panggilan fungsi kemas kini dengan semua parameter lengkap
                                         generateSimpleCertificate(
                                             context = context,
                                             studentName = safeName,
-                                            studentId = studentId,
+                                            studentId = matrix,
                                             workshopName = dynamicWorkshopName,
                                             workshopDate = dynamicWorkshopDate,
                                             workshopTime = dynamicWorkshopTime,
                                             organizerName = dynamicOrganizerName,
-                                            outputPath = pdfFile
+                                            outputPath = tempFile
                                         )
 
-                                        // 1. Kemas kini status dalam koleksi registrations
-                                        firestore.collection("registrations")
-                                            .whereEqualTo("workshopId", workshopId)
-                                            .get()
-                                            .addOnSuccessListener { querySnapshot ->
-                                                querySnapshot.documents.forEach { doc ->
-                                                    val sId = doc.getString("studentId") ?: doc.getString("userId") ?: doc.id
-                                                    if (sId == studentId) {
-                                                        firestore.collection("registrations").document(doc.id)
-                                                            .update("certificateStatus", "Sent")
-                                                    }
-                                                }
-                                            }
+                                        saveFileToPublicDownloads(context, tempFile, fileName)
 
-                                        // 2. Simpan rasmi ke koleksi "certificates"
-                                        val certDocId = "${workshopId}_${studentId}"
-                                        val certData = hashMapOf(
-                                            "studentId" to studentId,
-                                            "studentName" to safeName,
-                                            "workshopId" to workshopId,
-                                            "workshopName" to dynamicWorkshopName,
-                                            "issueDate" to SimpleDateFormat("dd MMMM yyyy", Locale.getDefault()).format(Date()),
-                                            "status" to "Sent"
-                                        )
-                                        firestore.collection("certificates").document(certDocId).set(certData)
+                                        if (!isSent) {
+                                            // 1. Kemas kini status dalam koleksi registrations
+                                            firestore.collection("registrations").document("${workshopId}_$studentId")
+                                                .update("certificateStatus", "Sent")
 
-                                        eligibleStudents[studentId] = Pair(safeName, "Sent")
-                                        scope.launch { snackbarHostState.showSnackbar("$certGenSnackbar$safeName") }
+                                            val certDocId = "${workshopId}_${studentId}"
+                                            val certData = hashMapOf(
+                                                "studentId" to studentId,
+                                                "studentNumber" to matrix,
+                                                "studentName" to safeName,
+                                                "workshopId" to workshopId,
+                                                "workshopName" to dynamicWorkshopName,
+                                                "workshopDate" to dynamicWorkshopDate,
+                                                "workshopTime" to dynamicWorkshopTime,
+                                                "issueDate" to SimpleDateFormat("dd MMMM yyyy", Locale.getDefault()).format(Date()),
+                                                "status" to "Sent"
+                                            )
+                                            firestore.collection("certificates").document(certDocId).set(certData)
+
+                                            eligibleStudents[studentId] = Triple(name, matrix, "Sent")
+                                            scope.launch { snackbarHostState.showSnackbar("$certGenSnackbar$safeName (PDF Saved)") }
+                                        } else {
+                                            scope.launch { snackbarHostState.showSnackbar("PDF saved for $safeName") }
+                                        }
                                     },
-                                    enabled = status != "Sent",
-                                    modifier = Modifier.padding(start = 16.dp)
+                                    modifier = Modifier.padding(start = 8.dp)
                                 ) {
-                                    Text(if (status == "Sent") sentText else actionSendText, fontSize = 14.sp)
+                                    Text(if (isSent) "Download" else actionSendText, fontSize = 14.sp)
                                 }
                             }
                         }
@@ -234,50 +300,51 @@ fun CertificateManagementScreen(
                     var count = 0
                     eligibleStudents.forEach { (studentId, data) ->
                         val name = data.first
+                        val matrix = data.second
+                        val status = data.third
+                        
                         val safeName = if (name.isNotBlank()) name else "Pelajar"
-                        val pdfFile = File(context.getExternalFilesDir(null), "Certificate_${studentId}.pdf")
+                        val fileName = "Cert_${safeName.replace(" ", "_")}_${matrix}.pdf"
+                        val tempFile = File(context.cacheDir, fileName)
 
-                        // Panggilan fungsi secara auto-generate
                         generateSimpleCertificate(
                             context = context,
                             studentName = safeName,
-                            studentId = studentId,
+                            studentId = matrix,
                             workshopName = dynamicWorkshopName,
                             workshopDate = dynamicWorkshopDate,
                             workshopTime = dynamicWorkshopTime,
                             organizerName = dynamicOrganizerName,
-                            outputPath = pdfFile
+                            outputPath = tempFile
                         )
+                        
+                        // Save all to downloads
+                        saveFileToPublicDownloads(context, tempFile, fileName)
 
-                        firestore.collection("registrations")
-                            .whereEqualTo("workshopId", workshopId)
-                            .get()
-                            .addOnSuccessListener { querySnapshot ->
-                                querySnapshot.documents.forEach { doc ->
-                                    val sId = doc.getString("studentId") ?: doc.getString("userId") ?: doc.id
-                                    if (sId == studentId) {
-                                        firestore.collection("registrations").document(doc.id)
-                                            .update("certificateStatus", "Sent")
-                                    }
-                                }
-                            }
+                        if (status != "Sent") {
+                            firestore.collection("registrations").document("${workshopId}_$studentId")
+                                .update("certificateStatus", "Sent")
 
-                        val certDocId = "${workshopId}_${studentId}"
-                        val certData = hashMapOf(
-                            "studentId" to studentId,
-                            "studentName" to safeName,
-                            "workshopId" to workshopId,
-                            "workshopName" to dynamicWorkshopName,
-                            "issueDate" to SimpleDateFormat("dd MMMM yyyy", Locale.getDefault()).format(Date()),
-                            "status" to "Sent"
-                        )
-                        firestore.collection("certificates").document(certDocId).set(certData)
+                            val certDocId = "${workshopId}_${studentId}"
+                            val certData = hashMapOf(
+                                "studentId" to studentId,
+                                "studentNumber" to matrix,
+                                "studentName" to safeName,
+                                "workshopId" to workshopId,
+                                "workshopName" to dynamicWorkshopName,
+                                "workshopDate" to dynamicWorkshopDate,
+                                "workshopTime" to dynamicWorkshopTime,
+                                "issueDate" to SimpleDateFormat("dd MMMM yyyy", Locale.getDefault()).format(Date()),
+                                "status" to "Sent"
+                            )
+                            firestore.collection("certificates").document(certDocId).set(certData)
 
-                        eligibleStudents[studentId] = Pair(safeName, "Sent")
-                        count++
+                            eligibleStudents[studentId] = Triple(name, matrix, "Sent")
+                            count++
+                        }
                     }
                     onAutoGenerateClick()
-                    scope.launch { snackbarHostState.showSnackbar("$successGenSnackbar1$count$successGenSnackbar2") }
+                    scope.launch { snackbarHostState.showSnackbar("$successGenSnackbar1$count$successGenSnackbar2 (All PDFs Saved)") }
                 },
                 modifier = Modifier
                     .fillMaxWidth()

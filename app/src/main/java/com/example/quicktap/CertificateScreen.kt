@@ -1,4 +1,4 @@
-package com.example.quicktap.dashboard.student
+package com.example.quicktap
 
 import android.content.ContentValues
 import android.os.Build
@@ -12,8 +12,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.MilitaryTech
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,11 +23,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.quicktap.AppSettingsState
 import com.example.quicktap.R
-import com.example.quicktap.dashboard.staff.generateSimpleCertificate
+import com.example.quicktap.generateSimpleCertificate
 import com.google.firebase.firestore.FirebaseFirestore
 import java.io.File
 import java.io.FileOutputStream
@@ -48,6 +51,7 @@ fun CertificateScreen(
     val firestore = FirebaseFirestore.getInstance()
 
     var studentName by remember { mutableStateOf("Loading...") }
+    var matrixNumber by remember { mutableStateOf("-") }
     var workshopName by remember { mutableStateOf("Workshop") }
     var workshopDate by remember { mutableStateOf("2026") }
     var workshopTime by remember { mutableStateOf("10:00 AM") }
@@ -58,6 +62,10 @@ fun CertificateScreen(
 
     val currentLang = AppSettingsState.currentLanguage
     val titleText = if (currentLang == "ms") "Sijil" else "Certificate"
+
+    val certTitleText = if (currentLang == "ms") "SIJIL PENYERTAAN" else "CERTIFICATE OF PARTICIPATION"
+    val certSubtitleText = if (currentLang == "ms") "Sijil ini dengan bangganya dianugerahkan kepada" else "This certificate is proudly presented to"
+    val certReasonText = if (currentLang == "ms") "kerana telah berjaya menyertai program / bengkel:" else "for successfully participating in the programme / workshop:"
 
     val checkingStatusText = if (currentLang == "ms") "Memeriksa Status..." else "Checking Status..."
     val downloadCertText = if (currentLang == "ms") "Muat Turun Sijil" else "Download Certificate"
@@ -76,7 +84,6 @@ fun CertificateScreen(
     val backgroundColor = if (isDark) Color(0xFF121212) else Color.White
     val cardBackground = if (isDark) Color(0xFF1E1E1E) else Color.White
     val borderColor = if (isDark) Color(0xFF2C2C2C) else Color.LightGray
-    val textStudentColor = if (isDark) Color.White else Color.Black
 
     LaunchedEffect(workshopId) {
         firestore.collection("workshops").document(workshopId)
@@ -92,34 +99,42 @@ fun CertificateScreen(
     }
 
     DisposableEffect(workshopId, studentId) {
-        val certDocId = "${workshopId}_${studentId}"
+        val certDocId = "${workshopId}_$studentId"
 
         val certListener = firestore.collection("certificates").document(certDocId)
             .addSnapshotListener { certDoc, _ ->
                 if (certDoc != null && certDoc.exists()) {
                     val rawName = certDoc.getString("studentName") ?: "Student"
-                    val name = if (rawName.isNotBlank() && rawName != studentId) rawName else "Student"
-                    val fetchedWorkshopName = certDoc.getString("workshopName")
+                    studentName = if (rawName.isNotBlank() && rawName != studentId) rawName else "Student"
+                    matrixNumber = certDoc.getString("studentNumber") ?: "-"
 
-                    if (!fetchedWorkshopName.isNullOrBlank()) {
-                        workshopName = fetchedWorkshopName
-                    }
-                    studentName = name
+                    certDoc.getString("workshopName")?.let { if (it.isNotBlank()) workshopName = it }
+                    certDoc.getString("workshopDate")?.let { if (it.isNotBlank()) workshopDate = it }
+                    certDoc.getString("workshopTime")?.let { if (it.isNotBlank()) workshopTime = it }
+
                     isEligible = true
                     isLoading = false
                 } else {
-                    firestore.collection("registrations").document(certDocId)
-                        .get()
+                    firestore.collection("users").document(studentId).get().addOnSuccessListener { userDoc ->
+                        if (userDoc.exists()) {
+                            matrixNumber = userDoc.getString("studentId") ?: userDoc.getString("studentNumber") ?: "-"
+                        }
+                    }
+
+                    firestore.collection("registrations").document(certDocId).get()
                         .addOnSuccessListener { regDoc ->
                             if (regDoc.exists()) {
                                 val rawName = regDoc.getString("studentName") ?: regDoc.getString("name") ?: "Student"
-                                val name = if (rawName.isNotBlank() && rawName != studentId) rawName else "Student"
+                                studentName = if (rawName.isNotBlank() && rawName != studentId) rawName else "Student"
+
+                                if (matrixNumber == "-") {
+                                    matrixNumber = regDoc.getString("studentNumber") ?: "-"
+                                }
 
                                 val hasCheckedIn = regDoc.get("timestamp") != null || regDoc.get("checkInTimestamp") != null
                                 val hasCheckedOut = regDoc.get("checkOutTime") != null || regDoc.get("checkOutTimestamp") != null || regDoc.get("timeout") != null
                                 val isSent = regDoc.getString("certificateStatus") == "Sent"
 
-                                studentName = name
                                 isEligible = (hasCheckedIn && hasCheckedOut) || isSent
                             } else {
                                 studentName = "Student"
@@ -135,9 +150,7 @@ fun CertificateScreen(
                 }
             }
 
-        onDispose {
-            certListener.remove()
-        }
+        onDispose { certListener.remove() }
     }
 
     Scaffold(
@@ -180,7 +193,7 @@ fun CertificateScreen(
                     )
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.MilitaryTech, contentDescription = navCertificate) },
+                    icon = { Icon(Icons.Default.WorkspacePremium, contentDescription = navCertificate) },
                     label = { Text(navCertificate, color = Color.White) },
                     selected = true,
                     onClick = onCertificateClick,
@@ -214,15 +227,17 @@ fun CertificateScreen(
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // --- KAD PREBIU SIJIL DENGAN TEKS DINAMIK LENGKAP ---
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(1.4f)
+                    .aspectRatio(1.414f)
                     .background(cardBackground, RoundedCornerShape(8.dp))
                     .border(1.dp, borderColor, RoundedCornerShape(8.dp))
                     .clip(RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.Center
             ) {
+                // Imej Latar Belakang Sijil (Kosong)
                 Image(
                     painter = painterResource(id = R.drawable.certificate_design),
                     contentDescription = "Certificate",
@@ -230,25 +245,78 @@ fun CertificateScreen(
                     contentScale = ContentScale.Fit
                 )
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(bottom = 18.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (!isLoading) {
-                        Text(
-                            text = studentName,
-                            color = textStudentColor,
-                            fontSize = 18.sp,
-                            style = MaterialTheme.typography.titleMedium
-                        )
+                // Kandungan Teks Prebiu di atas Imej Kosong
+                if (!isLoading) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 24.dp, vertical = 16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        // Tajuk & Sub-Tajuk Sijil
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = certTitleText,
+                                color = Color(0xFF1A1A1A),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = certSubtitleText,
+                                color = Color.DarkGray,
+                                fontSize = 7.sp,
+                                fontStyle = FontStyle.Italic,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+
+                        // Nama & ID Pelajar
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = studentName,
+                                color = Color.Black,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(1.dp))
+                            Text(
+                                text = if (currentLang == "ms") "No. ID: $matrixNumber" else "Student ID: $matrixNumber",
+                                color = Color.Gray,
+                                fontSize = 7.sp,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+
+                        // Keterangan & Nama Bengkel
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = certReasonText,
+                                color = Color.DarkGray,
+                                fontSize = 7.sp,
+                                fontStyle = FontStyle.Italic,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = workshopName,
+                                color = Color(0xFF912323),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center,
+                                maxLines = 2
+                            )
+                        }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(40.dp))
+            Spacer(modifier = Modifier.height(30.dp))
 
+            // --- BUTANG MUAT TURUN ---
             Button(
                 onClick = {
                     if (isEligible) {
@@ -259,7 +327,7 @@ fun CertificateScreen(
                             generateSimpleCertificate(
                                 context = context,
                                 studentName = studentName,
-                                studentId = studentId,
+                                studentId = matrixNumber,
                                 workshopName = workshopName,
                                 workshopDate = workshopDate,
                                 workshopTime = workshopTime,
@@ -296,11 +364,12 @@ fun CertificateScreen(
             ) {
                 Text(
                     text = if (isLoading) checkingStatusText else if (isEligible) downloadCertText else notEligibleText,
-                    color = Color.White
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
                 )
             }
 
-            Spacer(modifier = Modifier.height(40.dp))
+            Spacer(modifier = Modifier.height(30.dp))
         }
     }
 }

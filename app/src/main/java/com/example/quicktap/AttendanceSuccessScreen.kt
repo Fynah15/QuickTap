@@ -1,4 +1,4 @@
-package com.example.quicktap.dashboard.staff
+package com.example.quicktap
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*

@@ -1,7 +1,6 @@
 package com.example.quicktap
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -21,33 +20,30 @@ import androidx.navigation.navArgument
 import com.example.quicktap.auth.RoleSelectScreen
 import com.example.quicktap.auth.staff.*
 import com.example.quicktap.auth.student.*
-import com.example.quicktap.dashboard.staff.*
-import com.example.quicktap.dashboard.student.*
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 
-// Object global untuk urus tetapan Tema dan Bahasa secara global
 object AppSettingsState {
     var isDarkMode by mutableStateOf(false)
-    var currentLanguage by mutableStateOf("en") // "en" untuk English, "ms" untuk Bahasa Melayu
+    var currentLanguage by mutableStateOf("en")
 }
 
 class MainActivity : ComponentActivity() {
 
+    private val requestNotificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ -> }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Minta kebenaran notifikasi untuk peranti Android 13 (API 33) dan ke atas
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
-                    // Tindakan selepas pengguna memberi atau menolak kebenaran
-                }.launch(Manifest.permission.POST_NOTIFICATIONS)
+                requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
 
         setContent {
-            // Menggunakan MaterialTheme berasaskan tetapan global AppSettingsState secara reaktif
             androidx.compose.material3.MaterialTheme(
                 colorScheme = if (AppSettingsState.isDarkMode) {
                     androidx.compose.material3.darkColorScheme()
@@ -64,29 +60,45 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun QuickTapAppNavigation() {
     val navController = rememberNavController()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
-    // Dapatkan ID pengguna sebenar daripada Firebase Auth jika sudah log masuk, jika tidak guna default
-    val currentUser = FirebaseAuth.getInstance().currentUser
+    var currentUser by remember { mutableStateOf(FirebaseAuth.getInstance().currentUser) }
+
+    DisposableEffect(Unit) {
+        val authListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+            currentUser = firebaseAuth.currentUser
+        }
+        FirebaseAuth.getInstance().addAuthStateListener(authListener)
+        onDispose {
+            FirebaseAuth.getInstance().removeAuthStateListener(authListener)
+        }
+    }
+
     val currentLoggedInStudentId = currentUser?.uid ?: "STUDENT_12345"
     val defaultWorkshopId = "WORKSHOP_001"
 
-    // State untuk mengesan ID workshop yang aktif secara dinamik (real-time)
     var activeWorkshopId by remember { mutableStateOf(defaultWorkshopId) }
 
-    // Ambil ID workshop terkini/aktif dari Firestore jika ada
+    // Ambil ID workshop terkini/aktif dari Firestore jika ada dengan perlindungan ralat
     LaunchedEffect(Unit) {
-        FirebaseFirestore.getInstance().collection("workshops")
-            .limit(1)
-            .get()
-            .addOnSuccessListener { result ->
-                if (!result.isEmpty) {
-                    val doc = result.documents[0]
-                    activeWorkshopId = doc.id
+        try {
+            FirebaseFirestore.getInstance().collection("workshops")
+                .limit(1)
+                .get()
+                .addOnSuccessListener { result ->
+                    if (!result.isEmpty) {
+                        val doc = result.documents[0]
+                        activeWorkshopId = doc.id
+                    }
                 }
-            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
-    NavHost(navController = navController, startDestination = "role_select") {
+    val startDestinationRoute = "role_select"
+
+    NavHost(navController = navController, startDestination = startDestinationRoute) {
 
         // --- AUTHENTICATION ---
         composable("role_select") {
@@ -97,7 +109,11 @@ fun QuickTapAppNavigation() {
         }
         composable("student_login") {
             StudentLoginScreen(
-                onNavigateHome = { navController.navigate("student_dashboard") { popUpTo("student_login") { inclusive = true } } },
+                onNavigateHome = {
+                    navController.navigate("student_dashboard") {
+                        popUpTo("role_select") { inclusive = true }
+                    }
+                },
                 onSignUp = { navController.navigate("student_signup") }
             )
         }
@@ -105,7 +121,11 @@ fun QuickTapAppNavigation() {
 
         composable("staff_login") {
             StaffLoginScreen(
-                onLoginSuccess = { navController.navigate("staff_dashboard") { popUpTo("staff_login") { inclusive = true } } },
+                onLoginSuccess = {
+                    navController.navigate("staff_dashboard") {
+                        popUpTo("role_select") { inclusive = true }
+                    }
+                },
                 onSignUpClick = { navController.navigate("staff_signup") },
                 onBackClick = { navController.popBackStack() }
             )
@@ -120,8 +140,13 @@ fun QuickTapAppNavigation() {
                 onWorkshopListClick = { navController.navigate("workshop_list") },
                 onCertificateClick = { navController.navigate("student_certificate/$activeWorkshopId/$currentLoggedInStudentId") },
                 onHistoryClick = { navController.navigate("student_history/$currentLoggedInStudentId") },
-                onSettingsClick = { navController.navigate("student_settings") }
+                onSettingsClick = { navController.navigate("student_settings") },
+                onNotificationClick = { navController.navigate("notification_history") }
             )
+        }
+
+        composable("notification_history") {
+            NotificationHistoryScreen(onBackClick = { navController.popBackStack() })
         }
 
         composable("workshop_list") {
@@ -173,7 +198,11 @@ fun QuickTapAppNavigation() {
                 onBackClick = { navController.popBackStack() },
                 onAccountClick = { navController.navigate("student_edit_profile") },
                 onLogoutClick = {
-                    FirebaseAuth.getInstance().signOut()
+                    try {
+                        FirebaseAuth.getInstance().signOut()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                     navController.navigate("role_select") { popUpTo(0) { inclusive = true } }
                 }
             )
@@ -287,7 +316,6 @@ fun QuickTapAppNavigation() {
             AttendanceReportScreen(
                 workshopId = workshopId,
                 onBackClick = { navController.popBackStack() },
-                onDownloadReportClick = {},
                 onHomeClick = { navController.navigate("staff_dashboard") { popUpTo("staff_dashboard") { inclusive = true } } },
                 onReportClick = { /* Kekal di skrin laporan semasa */ },
                 onCertificateClick = { navController.navigate("staff_certificate_management/$workshopId") },
@@ -305,7 +333,11 @@ fun QuickTapAppNavigation() {
             CertificateManagementScreen(
                 workshopId = workshopId,
                 onBackClick = { navController.popBackStack() },
-                onAutoGenerateClick = {}
+                onAutoGenerateClick = {},
+                onHomeClick = { navController.navigate("staff_dashboard") { popUpTo("staff_dashboard") { inclusive = true } } },
+                onReportClick = { navController.navigate("staff_attendance_report/$workshopId") },
+                onCertificateClick = { /* Kekal di skrin sijil semasa */ },
+                onSettingsClick = { navController.navigate("staff_settings") }
             )
         }
 
@@ -313,7 +345,11 @@ fun QuickTapAppNavigation() {
             StaffSettingsScreen(
                 onBackClick = { navController.popBackStack() },
                 onLogoutClick = {
-                    FirebaseAuth.getInstance().signOut()
+                    try {
+                        FirebaseAuth.getInstance().signOut()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                     navController.navigate("role_select") { popUpTo(0) { inclusive = true } }
                 }
             )

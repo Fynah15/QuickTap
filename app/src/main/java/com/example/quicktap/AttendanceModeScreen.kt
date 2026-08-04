@@ -1,4 +1,4 @@
-package com.example.quicktap.dashboard.staff
+package com.example.quicktap
 
 import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
@@ -8,7 +8,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,7 +18,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.quicktap.AppSettingsState
 import com.google.firebase.firestore.FirebaseFirestore
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -36,14 +35,12 @@ fun AttendanceModeScreen(
     val isCheckInPressed by checkInInteractionSource.collectIsPressedAsState()
     val isCheckOutPressed by checkOutInteractionSource.collectIsPressedAsState()
 
-    // 1. Sokongan Bahasa Dinamik
     val currentLang = AppSettingsState.currentLanguage
-    val titleText = if (currentLang == "ms") "Mod Kehadiran" else "Attendance Mode"
-    val chooseModeText = if (currentLang == "ms") "Pilih Mod Kehadiran" else "Choose Attendance Mode"
-    val checkInText = if (currentLang == "ms") "Daftar Masuk" else "Check-In"
-    val checkOutText = if (currentLang == "ms") "Daftar Keluar" else "Check-Out"
+    val titleText = if (currentLang == "ms") "Attendance Mode" else "Attendance Mode"
+    val chooseModeText = if (currentLang == "ms") "Choose Mode Attendance" else "Choose Attendance Mode"
+    val checkInText = if (currentLang == "ms") "Check-in" else "Check-In"
+    val checkOutText = if (currentLang == "ms") "Check-out" else "Check-Out"
 
-    // 2. Sokongan Tema Gelap / Cerah (Dark / Light Mode)
     val backgroundColor = if (AppSettingsState.isDarkMode) Color(0xFF121212) else Color.White
     val textColor = if (AppSettingsState.isDarkMode) Color.White else Color.Black
 
@@ -66,7 +63,7 @@ fun AttendanceModeScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF912323))
@@ -121,7 +118,6 @@ fun AttendanceModeScreen(
                 ),
                 elevation = ButtonDefaults.buttonElevation(4.dp, pressedElevation = 8.dp)
             ) {
-                // Teks sentiasa berwarna hitam jika butang tidak dipilih/ditekan (kecuali mod gelap atau ketika ditekan)
                 val checkInTextColor = when {
                     selectedMode == "Check-In" || isCheckInPressed -> Color.White
                     AppSettingsState.isDarkMode -> Color.LightGray
@@ -166,7 +162,6 @@ fun AttendanceModeScreen(
                 ),
                 elevation = ButtonDefaults.buttonElevation(4.dp, pressedElevation = 8.dp)
             ) {
-                // Teks sentiasa berwarna hitam jika butang tidak dipilih/ditekan (kecuali mod gelap atau ketika ditekan)
                 val checkOutTextColor = when {
                     selectedMode == "Check-Out" || isCheckOutPressed -> Color.White
                     AppSettingsState.isDarkMode -> Color.LightGray

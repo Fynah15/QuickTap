@@ -1,4 +1,4 @@
-package com.example.quicktap.dashboard.student
+package com.example.quicktap
 
 import android.Manifest
 import android.os.Build
@@ -30,6 +30,7 @@ import coil.compose.AsyncImage
 import com.example.quicktap.AppSettingsState
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.example.quicktap.utils.WorkshopReminderManager
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -42,6 +43,7 @@ fun StudentDashboardScreen(
     onCertificateClick: () -> Unit,
     onHistoryClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onNotificationClick: () -> Unit = {},
     onProfileClick: () -> Unit = {}
 ) {
     val firestore = remember { FirebaseFirestore.getInstance() }
@@ -77,30 +79,48 @@ fun StudentDashboardScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { _ -> }
 
-    // Ambil data profil & acara akan datang dari Firestore
+    // Ambil data profil & peringatan bengkel
     LaunchedEffect(currentUser) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            try {
+                permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
 
         val uid = currentUser?.uid
         if (uid != null) {
-            firestore.collection("users").document(uid).get()
-                .addOnSuccessListener { document ->
-                    if (document.exists()) {
-                        fullName = document.getString("name") ?: "Nursyafinah Binti Hamdan"
-                        nickname = document.getString("nickname") ?: fullName.substringBefore(" ")
-                        studentIdNumber = document.getString("studentId") ?: "202209020204"
-                        courseName = document.getString("course") ?: (document.getString("program") ?: "Bachelor of Information Technology")
-                        profileImageUrl = document.getString("profileImageUrl") ?: ""
-                    }
-                }
-                .addOnFailureListener {
-                    nickname = currentUser.email?.substringBefore("@") ?: "Student"
-                }
-        }
+            // Panggil pengurus peringatan bengkel secara automatik selepas login/uid sedia
+            try {
+                WorkshopReminderManager.checkAndTriggerReminders(context, uid)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
 
-        firestore.collection("workshops").addSnapshotListener { snapshot, error ->
+            try {
+                firestore.collection("users").document(uid).get()
+                    .addOnSuccessListener { document ->
+                        if (document != null && document.exists()) {
+                            fullName = document.getString("name") ?: "Nursyafinah Binti Hamdan"
+                            nickname = document.getString("nickname") ?: fullName.substringBefore(" ")
+                            studentIdNumber = document.getString("studentId") ?: "202209020204"
+                            courseName = document.getString("course") ?: (document.getString("program") ?: "Bachelor of Information Technology")
+                            profileImageUrl = document.getString("profileImageUrl") ?: ""
+                        }
+                    }
+                    .addOnFailureListener {
+                        nickname = currentUser.email?.substringBefore("@") ?: "Student"
+                    }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    // Mendengar perubahan acara akan datang secara real-time dengan pelepasan sumber yang betul
+    DisposableEffect(Unit) {
+        val listenerRegistration = firestore.collection("workshops").addSnapshotListener { snapshot, error ->
             if (error == null && snapshot != null) {
                 val currentDate = Date()
                 val dateFormatList = listOf(
@@ -113,15 +133,22 @@ fun StudentDashboardScreen(
                 var nearestDate: Date? = null
 
                 for (doc in snapshot.documents) {
-                    val dateStr = doc.getString("date") ?: continue
-                    var parsedDate: Date? = null
-                    for (fmt in dateFormatList) {
-                        try {
-                            parsedDate = fmt.parse(dateStr)
-                            if (parsedDate != null) break
-                        } catch (e: Exception) {
-                            continue
+                    // Safely handle date as either Timestamp or String
+                    val parsedDate: Date? = when (val dateObj = doc.get("date") ?: doc.get("workshopDate")) {
+                        is com.google.firebase.Timestamp -> dateObj.toDate()
+                        is String -> {
+                            var temp: Date? = null
+                            for (fmt in dateFormatList) {
+                                try {
+                                    temp = fmt.parse(dateObj)
+                                    if (temp != null) break
+                                } catch (e: Exception) {
+                                    continue
+                                }
+                            }
+                            temp
                         }
+                        else -> null
                     }
 
                     if (parsedDate != null && parsedDate.after(currentDate)) {
@@ -135,7 +162,15 @@ fun StudentDashboardScreen(
                 if (nearestEvent != null) {
                     upcomingEventTitle = nearestEvent.getString("title") ?: "Upcoming Event"
                     upcomingEventDesc = nearestEvent.getString("description") ?: ""
-                    upcomingEventDate = nearestEvent.getString("date") ?: ""
+                    
+                    // Format the date consistently for display
+                    val dateObj = nearestEvent.get("date") ?: nearestEvent.get("workshopDate")
+                    upcomingEventDate = if (dateObj is com.google.firebase.Timestamp) {
+                        SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(dateObj.toDate())
+                    } else {
+                        dateObj.toString()
+                    }
+
                     upcomingEventTime = nearestEvent.getString("time") ?: ""
                     upcomingEventLocation = nearestEvent.getString("location") ?: ""
                     hasUpcomingEvent = true
@@ -143,6 +178,10 @@ fun StudentDashboardScreen(
                     hasUpcomingEvent = false
                 }
             }
+        }
+
+        onDispose {
+            listenerRegistration.remove()
         }
     }
 
@@ -258,7 +297,7 @@ fun StudentDashboardScreen(
             TopAppBar(
                 title = { Text(welcomeText, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold) },
                 actions = {
-                    IconButton(onClick = { showNotificationDialog = true }) {
+                    IconButton(onClick = onNotificationClick) {
                         Icon(Icons.Default.Notifications, contentDescription = "Notifications", tint = Color.White)
                     }
                 },
@@ -327,7 +366,7 @@ fun StudentDashboardScreen(
                 .fillMaxSize()
                 .background(backgroundColor)
                 .padding(paddingValues)
-                .verticalScroll(rememberScrollState()) // Menjadikan keseluruhan halaman boleh diskrol jika paparan panjang
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
             // --- KAD ID PELAJAR ---
@@ -408,11 +447,11 @@ fun StudentDashboardScreen(
             Text(highlightTitle, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = textColor)
             Spacer(modifier = Modifier.height(12.dp))
 
-            // --- KAD SOROTAN (UPCOMING EVENT) PENUH & BOLEH DIKLIK UNTUK DAFTAR ---
+            // --- KAD SOROTAN (UPCOMING EVENT) ---
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onWorkshopListClick() }, // Membawa pengguna terus ke senarai bengkel untuk daftar
+                    .clickable { onWorkshopListClick() },
                 shape = RoundedCornerShape(8.dp),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF0D1B2A)),
                 elevation = CardDefaults.cardElevation(2.dp)

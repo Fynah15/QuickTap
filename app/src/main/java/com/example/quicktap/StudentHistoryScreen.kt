@@ -1,4 +1,4 @@
-package com.example.quicktap.dashboard.student
+package com.example.quicktap
 
 import android.util.Log
 import androidx.compose.foundation.BorderStroke
@@ -88,9 +88,10 @@ fun StudentHistoryScreen(
 
                     val hasCheckedIn = checkIn != null
                     val hasCheckedOut = checkOut != null
+                    val isSent = regDoc.getString("certificateStatus") == "Sent"
 
-                    // Syarat kelayakan sijil: Pelajar wajib lengkap check-in DAN check-out
-                    val isEligible = hasCheckedIn && hasCheckedOut
+                    // Syarat kelayakan sijil: Pelajar wajib lengkap check-in DAN check-out ATAU status sudah dihantar
+                    val isEligible = (hasCheckedIn && hasCheckedOut) || isSent
 
                     if (workshopId.isNotEmpty()) {
                         firestore.collection("workshops").document(workshopId).get()

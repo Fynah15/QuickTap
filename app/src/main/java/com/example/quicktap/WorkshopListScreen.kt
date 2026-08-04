@@ -1,4 +1,4 @@
-package com.example.quicktap.dashboard.student
+package com.example.quicktap
 
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -14,7 +14,7 @@ import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.MilitaryTech
+import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,8 +28,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.quicktap.AppSettingsState
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.example.quicktap.utils.scheduleWorkshopReminders
+import com.example.quicktap.utils.cancelWorkshopReminders
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -43,7 +44,7 @@ data class StudentWorkshop(
     val currentCount: Int = 0,
     val maxSlots: Int = 0,
     val isRegistered: Boolean = false,
-    val isPast: Boolean = false // Tambahan untuk mengesan event lepas
+    val isPast: Boolean = false
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -144,7 +145,7 @@ fun WorkshopListScreen(
                                 currentCount = current,
                                 maxSlots = max,
                                 isRegistered = registeredWorkshopIds.contains(wId),
-                                isPast = isPastDate(wDate) // Semak sama ada tarikh sudah lepas
+                                isPast = isPastDate(wDate)
                             )
                         }
                         workshopList.addAll(newList)
@@ -210,7 +211,7 @@ fun WorkshopListScreen(
                     )
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.MilitaryTech, contentDescription = navCertificate) },
+                    icon = { Icon(Icons.Default.WorkspacePremium, contentDescription = navCertificate) },
                     label = { Text(navCertificate, color = Color.White) },
                     selected = false,
                     onClick = onCertificateClick,
@@ -319,7 +320,7 @@ fun WorkshopListScreen(
                             textColor = textColor,
                             secondaryTextColor = secondaryTextColor,
                             isRegistered = workshop.isRegistered,
-                            isPast = workshop.isPast, // Hantar status lepas ke kad
+                            isPast = workshop.isPast,
                             registerLabel = if (currentLang == "ms") "Daftar Sekarang" else "Register Now",
                             unregisterLabel = if (currentLang == "ms") "Batalkan Pendaftaran" else "Unregister",
                             pastLabel = if (currentLang == "ms") "Telah Tamat" else "Event Ended",
@@ -345,6 +346,7 @@ fun WorkshopListScreen(
                                         transaction.delete(regDocRef)
                                         transaction.update(workshopRef, "registeredCount", "$newCount/$maxSlots registered")
                                     }.addOnSuccessListener {
+                                        cancelWorkshopReminders(context, workshop.id, currentUserId)
                                         Toast.makeText(context, unregisterMsg, Toast.LENGTH_SHORT).show()
                                         onRegisterSuccess()
                                     }.addOnFailureListener { e ->
@@ -377,7 +379,7 @@ fun WorkshopListScreen(
                             val globalRegistrationDocRef = firestore.collection("registrations").document("${workshopId}_$currentUserId")
 
                             firestore.collection("users").document(currentUserId).get().addOnSuccessListener { userDoc ->
-                                val fetchedName = userDoc.getString("name") ?: userDoc.getString("fullName") ?: "Student"
+                                val fetchedFullName = userDoc.getString("fullName") ?: userDoc.getString("name") ?: "Student"
                                 val fetchedStudentId = userDoc.getString("studentId") ?: userDoc.getString("matrixNo") ?: userDoc.getString("idNumber") ?: fallbackStudentId
 
                                 firestore.runTransaction { transaction ->
@@ -390,13 +392,14 @@ fun WorkshopListScreen(
                                     if (currentCount < maxSlots) {
                                         val newCount = currentCount + 1
 
+                                        // Hanya data pendaftaran biasa (status REGISTERED), TIADA medan timestamp / checkIn
                                         transaction.set(globalRegistrationDocRef, mapOf(
                                             "workshopId" to workshopId,
                                             "studentId" to currentUserId,
                                             "studentNumber" to fetchedStudentId,
-                                            "name" to fetchedName,
-                                            "status" to "REGISTERED",
-                                            "timestamp" to FieldValue.serverTimestamp()
+                                            "fullName" to fetchedFullName,
+                                            "name" to fetchedFullName,
+                                            "status" to "REGISTERED"
                                         ))
 
                                         transaction.update(workshopRef, "registeredCount", "$newCount/$maxSlots registered")
@@ -405,6 +408,10 @@ fun WorkshopListScreen(
                                         throw Exception("Full")
                                     }
                                 }.addOnSuccessListener {
+                                    val w = selectedWorkshop!!
+                                    scheduleWorkshopReminders(
+                                        context, w.id, w.title, w.date, w.time, currentUserId
+                                    )
                                     Toast.makeText(context, successMsg, Toast.LENGTH_SHORT).show()
                                     showDialog = false
                                     onRegisterSuccess()
@@ -498,7 +505,6 @@ fun isFutureDate(dateStr: String): Boolean {
     return workshopDate.after(today)
 }
 
-// Fungsi baharu untuk menyemak sama ada tarikh sudah lepas (sebelum hari ini)
 fun isPastDate(dateStr: String): Boolean {
     val d = parseDate(dateStr) ?: return false
     val workshopDate = stripTime(d)
@@ -588,12 +594,11 @@ fun WorkshopCard(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Logik butang: Jika sudah lepas dan belum daftar, butang dilumpuhkan (disabled) dan dipaparkan sebagai "Telah Tamat"
                 val buttonEnabled = !(isPast && !isRegistered)
                 val buttonContainerColor = when {
-                    isRegistered -> Color(0xFFC62828) // Merah untuk unregister
-                    isPast -> Color.Gray              // Kelabu jika sudah lepas
-                    else -> Color(0xFF4A90E2)         // Biru untuk daftar biasa
+                    isRegistered -> Color(0xFFC62828)
+                    isPast -> Color.Gray
+                    else -> Color(0xFF4A90E2)
                 }
 
                 Button(

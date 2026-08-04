@@ -1,4 +1,4 @@
-package com.example.quicktap.dashboard.staff
+package com.example.quicktap
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -15,6 +15,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.quicktap.AppSettingsState
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
@@ -30,6 +31,11 @@ fun StaffDashboardScreen(
     onCertificateManagementClick: () -> Unit
 ) {
     val firestore = remember { FirebaseFirestore.getInstance() }
+    val auth = remember { FirebaseAuth.getInstance() }
+    val currentUser = auth.currentUser
+
+    // State untuk data profil staf
+    var staffName by remember { mutableStateOf("Staff") }
 
     // State untuk data bengkel aktif secara real-time
     var activeWorkshopId by remember { mutableStateOf<String?>(null) }
@@ -50,7 +56,7 @@ fun StaffDashboardScreen(
 
     // 1. Sokongan Bahasa Dinamik
     val currentLang = AppSettingsState.currentLanguage
-    val welcomeText = if (currentLang == "ms") "Selamat datang, Nursyafinah!" else "Welcome, Nursyafinah!"
+    val welcomeText = if (currentLang == "ms") "Selamat datang, $staffName!" else "Welcome, $staffName!"
     val homeNav = if (currentLang == "ms") "Utama" else "Home"
     val reportNav = if (currentLang == "ms") "Laporan" else "Report"
     val certNav = if (currentLang == "ms") "Sijil" else "Certificate"
@@ -87,8 +93,17 @@ fun StaffDashboardScreen(
     val absentBoxBg = if (isDark) Color(0xFF4A2222) else Color(0xFFFDEAEA)
 
     // Muat turun data bengkel TERKINI (Latest workshop) secara Real-Time dari Firestore
-    DisposableEffect(Unit) {
+    DisposableEffect(currentUser) {
         var registrationsListener: ListenerRegistration? = null
+
+        // Ambil nama staf
+        currentUser?.uid?.let { uid ->
+            firestore.collection("users").document(uid).get().addOnSuccessListener { doc ->
+                if (doc.exists()) {
+                    staffName = doc.getString("nickname") ?: doc.getString("name") ?: "Staff"
+                }
+            }
+        }
 
         val processWorkshopDocument: (com.google.firebase.firestore.DocumentSnapshot) -> Unit = { workshopDoc ->
             val workshopId = workshopDoc.id

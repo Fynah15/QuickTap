@@ -1,4 +1,4 @@
-package com.example.quicktap.dashboard.student
+package com.example.quicktap
 
 import android.net.Uri
 import android.widget.Toast
@@ -25,7 +25,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.example.quicktap.AppSettingsState
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.storage.FirebaseStorage

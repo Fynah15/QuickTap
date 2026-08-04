@@ -1,4 +1,4 @@
-package com.example.quicktap.dashboard.staff
+package com.example.quicktap
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -16,18 +16,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.quicktap.AppSettingsState
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestore
 import java.text.SimpleDateFormat
 import java.util.Locale
-
-data class LiveStudentRow(
-    val studentKey: String,
-    var name: String,
-    var checkIn: String,
-    var checkOut: String
-)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,7 +31,7 @@ fun LiveAttendanceScreen(
     val firestore = remember { FirebaseFirestore.getInstance() }
 
     var studentList by remember { mutableStateOf(listOf<LiveStudentRow>()) }
-    var totalRegisteredCount by remember { mutableStateOf(0) }
+    var totalRegisteredCount by remember { mutableIntStateOf(0) }
     var workshopTitleName by remember { mutableStateOf("Live Attendance") }
 
     val currentLang = AppSettingsState.currentLanguage
@@ -64,7 +56,6 @@ fun LiveAttendanceScreen(
     val presentCardColor = if (isDark) Color(0xFF2E6930) else Color(0xFF81C784)
     val absentCardColor = if (isDark) Color(0xFF783131) else Color(0xFFE57373)
 
-    // PENAPISAN KETAT: Hanya terima objek Firestore Timestamp yang sah hasil imbasan NFC
     val parseTimestampToTime: (Any?) -> String = { rawValue ->
         try {
             when (rawValue) {
@@ -73,7 +64,7 @@ fun LiveAttendanceScreen(
                 }
                 else -> "-"
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             "-"
         }
     }
@@ -99,45 +90,71 @@ fun LiveAttendanceScreen(
                 val studentMap = mutableMapOf<String, LiveStudentRow>()
 
                 for (doc in snapshot.documents) {
-                    val rawStudentName = doc.getString("studentName")
-                        ?: doc.getString("name")
-                        ?: doc.getString("fullName")
-
-                    val studentId = doc.getString("studentId") ?: doc.id
-                    val studentKey = studentId
-
-                    val studentName = if (!rawStudentName.isNullOrBlank() && !rawStudentName.matches(Regex("^[A-Fa-f0-9]+$"))) {
-                        rawStudentName
-                    } else {
-                        studentId
-                    }
-
-                    // Ambil nilai medan timestamp secara langsung
                     val timestampField = doc.get("timestamp")
                     val checkOutTimeField = doc.get("checkOutTime")
 
-                    // Jika ia bukan Timestamp sebenar (cth: string kosong/null), ia akan kekal "-"
                     val formattedCheckIn = parseTimestampToTime(timestampField)
                     val formattedCheckOut = parseTimestampToTime(checkOutTimeField)
 
-                    if (studentMap.containsKey(studentKey)) {
-                        val existing = studentMap[studentKey]!!
+                    // PENAPISAN KETAT: Jika pelajar belum buat tap sama sekali, abaikan!
+                    if (formattedCheckIn == "-" && formattedCheckOut == "-") {
+                        continue
+                    }
+
+                    // Ambil pelbagai kemungkinan medan nama daripada dokumen pendaftaran
+                    val rawStudentName = doc.getString("studentName")
+                        ?: doc.getString("name")
+                        ?: doc.getString("fullName")
+                        ?: doc.getString("userName")
+
+                    val studentId = doc.getString("studentId") ?: doc.getString("userId") ?: doc.id.substringAfter("_")
+
+                    // Semak sama ada nama yang ada sah (bukan teks kosong atau kod UID/Matrix)
+                    val isInvalidName = rawStudentName.isNullOrBlank() ||
+                            rawStudentName.length > 20 && rawStudentName.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' || it == '-' } ||
+                            rawStudentName == studentId
+
+                    val finalDisplayName = if (!isInvalidName) rawStudentName.orEmpty() else "Memuatkan nama..."
+
+                    // Jika nama tidak sah atau "Memuatkan nama...", cuba buat query tambahan secara dinamik untuk ambil dari koleksi "users"
+                    if ((isInvalidName || finalDisplayName == "Memuatkan nama...") && studentId.isNotBlank()) {
+                        firestore.collection("users").document(studentId).get()
+                            .addOnSuccessListener { userDoc ->
+                                if (userDoc.exists()) {
+                                    val realName = userDoc.getString("name")
+                                        ?: userDoc.getString("fullName")
+                                        ?: userDoc.getString("studentName")
+                                        ?: userDoc.getString("nickname")
+
+                                    if (!realName.isNullOrBlank()) {
+                                        // Kemas kini semula state senarai jika nama sebenar dijumpai
+                                        studentMap[studentId]?.let { row ->
+                                            row.name = realName
+                                            studentList = studentMap.values.toList().sortedBy { it.name }
+                                        }
+                                    }
+                                }
+                            }
+                    }
+
+                    if (studentMap.containsKey(studentId)) {
+                        val existing = studentMap[studentId]!!
                         if (formattedCheckIn != "-") existing.checkIn = formattedCheckIn
                         if (formattedCheckOut != "-") existing.checkOut = formattedCheckOut
-                        if (!studentName.matches(Regex("^[A-Fa-f0-9]+$"))) {
-                            existing.name = studentName
+                        if (!isInvalidName) {
+                            existing.name = finalDisplayName
                         }
                     } else {
-                        studentMap[studentKey] = LiveStudentRow(
-                            studentKey = studentKey,
-                            name = studentName,
+                        studentMap[studentId] = LiveStudentRow(
+                            studentKey = studentId,
+                            name = finalDisplayName,
                             checkIn = formattedCheckIn,
                             checkOut = formattedCheckOut
                         )
                     }
                 }
 
-                studentList = studentMap.values.toList()
+                studentList = studentMap.values.toList().sortedBy { it.name }
             }
 
         onDispose {
@@ -146,8 +163,7 @@ fun LiveAttendanceScreen(
         }
     }
 
-    // HANYA dikira hadir jika checkIn atau checkOut betul-betul mempunyai masa jam yang sah (bukan "-")
-    val presentCount = studentList.count { it.checkIn != "-" || it.checkOut != "-" }
+    val presentCount = studentList.size
     val absentCount = if (totalRegisteredCount >= presentCount) totalRegisteredCount - presentCount else 0
     val attendancePercentage = if (totalRegisteredCount > 0) (presentCount * 100) / totalRegisteredCount else 0
 

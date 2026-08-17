@@ -1,4 +1,4 @@
-package com.example.quicktap.auth.staff
+package com.example.quicktap.auth
 
 import android.widget.Toast
 import androidx.compose.foundation.Image

@@ -26,13 +26,13 @@ fun StaffAttendanceSuccessScreen(
     timeText: String,
     onNextScanClick: () -> Unit
 ) {
-    // Auto-dismiss selepas 1.5 saat supaya boleh imbas pelajar seterusnya secara automatik
+    // Auto-dismiss after 1.5 seconds to seamlessly scan the next student
     LaunchedEffect(Unit) {
         delay(1500L)
         onNextScanClick()
     }
 
-    // 1. Sokongan Bahasa Dinamik
+    // 1. Dynamic Language Support
     val currentLang = AppSettingsState.currentLanguage
     val statusTranslated = if (status.equals("Check-In", ignoreCase = true)) {
         if (currentLang == "ms") "Daftar Masuk" else "Check-In"
@@ -44,7 +44,7 @@ fun StaffAttendanceSuccessScreen(
     val capturedAtLabel = if (currentLang == "ms") "Direkodkan pada: $timeText" else "Captured at: $timeText"
     val scanNextText = if (currentLang == "ms") "Imbas Pelajar Seterusnya" else "Scan Next Student"
 
-    // 2. Sokongan Tema Gelap / Cerah (Dark / Light Mode)
+    // 2. Dark / Light Mode Theme Support
     val isDark = AppSettingsState.isDarkMode
     val backgroundColor = if (isDark) Color(0xFF121212) else Color(0xFFF9F9F9)
     val textColor = if (isDark) Color.White else Color.Black
@@ -97,7 +97,7 @@ fun StaffAttendanceSuccessScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Masa dipaparkan di sini
+            // Time displayed here
             Text(
                 text = capturedAtLabel,
                 fontSize = 16.sp,

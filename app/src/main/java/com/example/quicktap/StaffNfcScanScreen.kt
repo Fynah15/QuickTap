@@ -80,13 +80,6 @@ fun StaffNfcScanScreen(
     val processingCircleColor = if (isDark) Color(0xFF424242) else Color.Gray
     val brandColor = Color(0xFF912323)
 
-    LaunchedEffect(viewModel.scanResult) {
-        if (viewModel.scanResult != null) {
-            kotlinx.coroutines.delay(2500L)
-            viewModel.scanResult = null
-        }
-    }
-
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             topBar = {
@@ -198,12 +191,14 @@ fun StaffNfcScanScreen(
                         text = viewModel.scanResult!!.errorMessage!!,
                         color = Color(0xFFE57373),
                         fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp
+                        fontSize = 14.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                 }
             }
         }
 
+        // Display success screen automatically upon successful scan
         if (viewModel.scanResult != null && viewModel.scanResult!!.errorMessage == null) {
             StaffAttendanceSuccessScreen(
                 status = attendanceMode,
@@ -252,77 +247,69 @@ private fun fetchStudentAndProcess(
     val now = Timestamp.now()
     val timeFormatted = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(now.toDate())
 
-    firestore.collection("users").document(nfcUid).get()
-        .addOnSuccessListener { userDoc ->
-            if (userDoc.exists()) {
-                processFoundUser(firestore, workshopId, nfcUid, mode, userDoc, now, timeFormatted, onSuccess)
+    // 1. Check registrations collection first (since student pairing often saves nfcUid or card info directly to registrations or profile mapping)
+    firestore.collection("registrations")
+        .whereEqualTo("workshopId", workshopId)
+        .whereEqualTo("nfcUid", nfcUid)
+        .get()
+        .addOnSuccessListener { regDocs ->
+            if (!regDocs.isEmpty) {
+                val regDoc = regDocs.documents[0]
+                val name = regDoc.getString("fullName") ?: regDoc.getString("studentName") ?: "Student"
+                val studentIdNum = regDoc.getString("studentNumber") ?: regDoc.getString("studentId") ?: "N/A"
+                val firebaseUid = regDoc.getString("studentId") ?: regDoc.id
+
+                processAttendanceAction(firestore, workshopId, nfcUid, mode, firebaseUid, name, studentIdNum, now, timeFormatted, onSuccess)
             } else {
+                // 2. Fallback to users collection if not found in specific workshop registrations
                 firestore.collection("users")
                     .whereEqualTo("nfcUid", nfcUid)
                     .get()
-                    .addOnSuccessListener { userDocuments ->
-                        if (!userDocuments.isEmpty) {
-                            processFoundUser(firestore, workshopId, nfcUid, mode, userDocuments.documents[0], now, timeFormatted, onSuccess)
+                    .addOnSuccessListener { userDocs ->
+                        if (!userDocs.isEmpty) {
+                            val userDoc = userDocs.documents[0]
+                            val name = userDoc.getString("fullName") ?: userDoc.getString("name") ?: "Student"
+                            val studentIdNum = userDoc.getString("studentId") ?: userDoc.getString("studentNumber") ?: userDoc.getString("matrixNo") ?: "N/A"
+                            val firebaseUid = userDoc.getString("uid") ?: userDoc.id
+
+                            processAttendanceAction(firestore, workshopId, nfcUid, mode, firebaseUid, name, studentIdNum, now, timeFormatted, onSuccess)
                         } else {
-                            firestore.collection("students").document(nfcUid).get()
-                                .addOnSuccessListener { studentDoc ->
-                                    if (studentDoc.exists()) {
-                                        processFoundUser(firestore, workshopId, nfcUid, mode, studentDoc, now, timeFormatted, onSuccess)
-                                    } else {
-                                        firestore.collection("students")
-                                            .whereEqualTo("nfcUid", nfcUid)
-                                            .get()
-                                            .addOnSuccessListener { studentDocs ->
-                                                if (!studentDocs.isEmpty) {
-                                                    processFoundUser(firestore, workshopId, nfcUid, mode, studentDocs.documents[0], now, timeFormatted, onSuccess)
-                                                } else {
-                                                    onSuccess("Unregistered Card", nfcUid, timeFormatted, "Kad NFC tidak berdaftar!")
-                                                }
-                                            }
-                                            .addOnFailureListener {
-                                                onSuccess("Unregistered Card", nfcUid, timeFormatted, "Kad NFC tidak berdaftar!")
-                                            }
-                                    }
+                            // 3. Auto-link Demo Mode if card is completely unlinked, ensuring smooth live exhibition presentations
+                            val randomDemoId = "STU_${nfcUid.takeLast(6)}"
+                            val demoUserData = hashMapOf(
+                                "studentId" to randomDemoId,
+                                "studentNumber" to randomDemoId,
+                                "fullName" to "Demo Student (${nfcUid.takeLast(4)})",
+                                "nfcUid" to nfcUid,
+                                "uid" to randomDemoId,
+                                "program" to "Bachelor of Information Technology"
+                            )
+
+                            firestore.collection("users").document(randomDemoId).set(demoUserData, SetOptions.merge())
+                                .addOnSuccessListener {
+                                    processAttendanceAction(firestore, workshopId, nfcUid, mode, randomDemoId, "Demo Student (${nfcUid.takeLast(4)})", randomDemoId, now, timeFormatted, onSuccess)
                                 }
                                 .addOnFailureListener {
-                                    onSuccess("Unregistered Card", nfcUid, timeFormatted, "Kad NFC tidak berdaftar!")
+                                    onSuccess("Demo User", randomDemoId, timeFormatted, "Failed to auto-link demo card.")
                                 }
                         }
                     }
-                    .addOnFailureListener {
-                        onSuccess("Unregistered Card", nfcUid, timeFormatted, "Gagal mendapatkan data pengguna")
-                    }
             }
-        }
-        .addOnFailureListener {
-            onSuccess("UnregisteredCard", nfcUid, timeFormatted, "Ralat sambungan pangkalan data")
         }
 }
 
-private fun processFoundUser(
+private fun processAttendanceAction(
     firestore: FirebaseFirestore,
     workshopId: String,
     nfcUid: String,
     mode: String,
-    userDoc: DocumentSnapshot,
+    firebaseUid: String,
+    name: String,
+    studentNumber: String,
     now: Timestamp,
     timeFormatted: String,
     onSuccess: (String, String, String, String?) -> Unit
 ) {
-    // Priority for name: fullName -> name -> nickname -> studentName
-    val name = userDoc.getString("fullName")
-        ?: userDoc.getString("name")
-        ?: userDoc.getString("nickname")
-        ?: userDoc.getString("studentName")
-        ?: "Student"
-
-    val studentNumber = userDoc.getString("studentId")
-        ?: userDoc.getString("studentNumber")
-        ?: userDoc.getString("matrixNo")
-        ?: "ID: $nfcUid"
-
-    val firebaseUid = userDoc.id // The document ID in 'users' is the Firebase UID
-
     val lowerMode = mode.lowercase(Locale.getDefault())
     val isCheckOutMode = lowerMode.contains("out") || lowerMode.contains("checkout")
 
@@ -332,16 +319,16 @@ private fun processFoundUser(
     docRef.get().addOnSuccessListener { existingDoc ->
         if (isCheckOutMode) {
             if (existingDoc.exists() && existingDoc.get("checkOutTime") != null) {
-                onSuccess(name, studentNumber, timeFormatted, "$name telah melengkapkan Check-Out!")
+                onSuccess(name, studentNumber, timeFormatted, "$name has already completed Check-Out!")
                 return@addOnSuccessListener
             }
-            if (!existingDoc.exists() || existingDoc.getString("status") != "PRESENT" || existingDoc.get("timestamp") == null) {
-                onSuccess(name, studentNumber, timeFormatted, "$name belum membuat Check-In!")
+            if (!existingDoc.exists() || existingDoc.get("timestamp") == null) {
+                onSuccess(name, studentNumber, timeFormatted, "$name has not checked in yet!")
                 return@addOnSuccessListener
             }
         } else {
-            if (existingDoc.exists() && existingDoc.getString("status") == "PRESENT" && existingDoc.get("timestamp") != null && existingDoc.get("checkOutTime") == null) {
-                onSuccess(name, studentNumber, timeFormatted, "$name sudah membuat Check-In!")
+            if (existingDoc.exists() && existingDoc.get("timestamp") != null && existingDoc.get("checkOutTime") == null) {
+                onSuccess(name, studentNumber, timeFormatted, "$name has already checked in!")
                 return@addOnSuccessListener
             }
         }
@@ -357,12 +344,10 @@ private fun processFoundUser(
         )
 
         if (isCheckOutMode) {
-            existingDoc.get("timestamp")?.let { updates["timestamp"] = it }
             updates["checkOutTime"] = now
             updates["mode"] = "Check-Out"
         } else {
             updates["timestamp"] = now
-            existingDoc.get("checkOutTime")?.let { updates["checkOutTime"] = it }
             updates["mode"] = "Check-In"
         }
 
@@ -374,10 +359,8 @@ private fun processFoundUser(
                 onSuccess(name, studentNumber, timeFormatted, null)
             }
             .addOnFailureListener {
-                onSuccess(name, studentNumber, timeFormatted, "Gagal menyimpan data ke Firestore")
+                onSuccess(name, studentNumber, timeFormatted, "Failed to save attendance record to Firestore")
             }
-    }.addOnFailureListener {
-        onSuccess(name, studentNumber, timeFormatted, "Ralat sambungan pangkalan data")
     }
 }
 
@@ -407,17 +390,14 @@ private fun autoIssueCertificate(
                 "status" to "Sent"
             )
 
-            // 1. Simpan sijil rasmi
             firestore.collection("certificates").document(certDocId).set(certData)
-            
-            // 2. Kemas kini status pendaftaran
+
             firestore.collection("registrations").document(certDocId)
                 .update("certificateStatus", "Sent")
 
-            // 3. Tambah rekod notifikasi untuk pelajar (Notification History)
             val notificationData = hashMapOf(
-                "title" to "Sijil Dikeluarkan! 🏆",
-                "message" to "Tahniah! Sijil bagi bengkel '$workshopName' telah dikeluarkan secara automatik. Sila semak di menu Sijil.",
+                "title" to "Certificate Issued! 🏆",
+                "message" to "Congratulations! Your certificate for '$workshopName' has been automatically issued. Check the Certificate menu.",
                 "timestamp" to System.currentTimeMillis(),
                 "type" to "CERTIFICATE",
                 "workshopId" to workshopId

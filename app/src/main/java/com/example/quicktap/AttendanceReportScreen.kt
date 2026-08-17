@@ -1,10 +1,13 @@
 package com.example.quicktap
 
+import android.content.ContentValues
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import android.widget.Toast
 import android.content.Context
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
-import android.os.Environment
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import com.google.firebase.firestore.FirebaseFirestore
 import java.io.File
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -40,11 +44,10 @@ fun AttendanceReportScreen(
     onHomeClick: () -> Unit = {},
     onReportClick: () -> Unit = {},
     onCertificateClick: () -> Unit = {},
-    onSettingsClick: () -> Unit = {}
+    onSettingsClick: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val firestore = remember { FirebaseFirestore.getInstance() }
-    // ... (existing code remains same until Button)
 
     var studentList by remember { mutableStateOf(listOf<LiveStudentRow>()) }
     var totalRegisteredCount by remember { mutableIntStateOf(0) }
@@ -63,6 +66,9 @@ fun AttendanceReportScreen(
     val outHeader = if (currentLang == "ms") "Keluar" else "Out"
     val downloadReportText = if (currentLang == "ms") "Muat Turun Laporan" else "Download Report"
     val noRecordsText = if (currentLang == "ms") "Tiada rekod kehadiran NFC dijumpai." else "No NFC attendance records found."
+
+    val pdfSavedToast = if (currentLang == "ms") "PDF berjaya disimpan ke Download!" else "PDF successfully saved to Downloads!"
+    val pdfErrorToast = if (currentLang == "ms") "Gagal menjana atau menyimpan PDF." else "Failed to generate or save PDF."
 
     val navHomeLabel = if (currentLang == "ms") "Utama" else "Home"
     val navReportLabel = if (currentLang == "ms") "Laporan" else "Report"
@@ -91,6 +97,7 @@ fun AttendanceReportScreen(
             }
         }
 
+        // Ambil senarai pendaftaran sebenar untuk mengira jumlah kapasiti/berdaftar yang tepat
         val registrationListener = firestore.collection("registrations")
             .whereEqualTo("workshopId", workshopId)
             .addSnapshotListener { snapshot, error ->
@@ -144,6 +151,7 @@ fun AttendanceReportScreen(
         }
     }
 
+    // Pengiraan Present dan Absent yang Tepat
     val presentCount = studentList.size
     val absentCount = if (totalRegisteredCount >= presentCount) totalRegisteredCount - presentCount else 0
 
@@ -283,7 +291,25 @@ fun AttendanceReportScreen(
 
             Button(
                 onClick = {
-                    generateAttendancePdf(context, workshopTitleName, studentList)
+                    try {
+                        val fileName = "Attendance_${workshopTitleName.replace(" ", "_")}_${System.currentTimeMillis()}.pdf"
+                        val tempFile = File(context.cacheDir, fileName)
+
+                        generateAttendancePdfToFile(context, workshopTitleName, studentList, tempFile)
+
+                        if (tempFile.exists()) {
+                            val saved = saveReportFileToPublicDownloads(context, tempFile, fileName)
+                            if (saved) {
+                                Toast.makeText(context, pdfSavedToast, Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, pdfErrorToast, Toast.LENGTH_LONG).show()
+                            }
+                        } else {
+                            Toast.makeText(context, pdfErrorToast, Toast.LENGTH_LONG).show()
+                        }
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A90E2)),
                 modifier = Modifier.fillMaxWidth().height(42.dp),
@@ -295,7 +321,7 @@ fun AttendanceReportScreen(
     }
 }
 
-private fun generateAttendancePdf(context: Context, workshopName: String, studentList: List<LiveStudentRow>) {
+private fun generateAttendancePdfToFile(context: Context, workshopName: String, studentList: List<LiveStudentRow>, outputFile: File) {
     val pdfDocument = PdfDocument()
     val paint = Paint()
     val titlePaint = Paint()
@@ -323,7 +349,7 @@ private fun generateAttendancePdf(context: Context, workshopName: String, studen
     var yPos = 170f
     var index = 1
     for (student in studentList) {
-        if (yPos > 800) break // Simple pagination limit
+        if (yPos > 800) break
         canvas.drawText("$index.", 40f, yPos, paint)
         canvas.drawText(student.name, 80f, yPos, paint)
         canvas.drawText(student.studentKey, 300f, yPos, paint)
@@ -335,16 +361,43 @@ private fun generateAttendancePdf(context: Context, workshopName: String, studen
 
     pdfDocument.finishPage(page)
 
-    val fileName = "Attendance_${workshopName.replace(" ", "_")}_${System.currentTimeMillis()}.pdf"
-    val file = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), fileName)
-
     try {
-        pdfDocument.writeTo(FileOutputStream(file))
-        Toast.makeText(context, "PDF saved to Documents", Toast.LENGTH_LONG).show()
+        pdfDocument.writeTo(FileOutputStream(outputFile))
     } catch (e: Exception) {
         e.printStackTrace()
-        Toast.makeText(context, "Failed to generate PDF", Toast.LENGTH_SHORT).show()
     } finally {
         pdfDocument.close()
+    }
+}
+
+private fun saveReportFileToPublicDownloads(context: Context, sourceFile: File, fileName: String): Boolean {
+    return try {
+        var outputStream: OutputStream? = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val contentValues = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+            if (uri != null) {
+                outputStream = resolver.openOutputStream(uri)
+            }
+        } else {
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (!downloadsDir.exists()) downloadsDir.mkdirs()
+            val destinationFile = File(downloadsDir, fileName)
+            outputStream = FileOutputStream(destinationFile)
+        }
+
+        outputStream?.use { output ->
+            sourceFile.inputStream().use { input ->
+                input.copyTo(output)
+            }
+        }
+        true
+    } catch (e: Exception) {
+        false
     }
 }

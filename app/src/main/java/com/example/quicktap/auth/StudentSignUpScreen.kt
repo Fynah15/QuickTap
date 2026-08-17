@@ -1,4 +1,4 @@
-package com.example.quicktap.auth.student
+package com.example.quicktap.auth
 
 import android.widget.Toast
 import androidx.compose.foundation.Image
@@ -24,18 +24,23 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
 import com.google.firebase.firestore.FirebaseFirestore
 import com.example.quicktap.R
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
-fun StudentSignUpScreen(onNavigateToLogin: () -> Unit) {
+fun StudentSignUpScreen(onNavigateToHome: () -> Unit) {
     val auth = FirebaseAuth.getInstance()
     val firestore = FirebaseFirestore.getInstance()
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
     var fullName by remember { mutableStateOf("") }
     var nickname by remember { mutableStateOf("") }
     var studentId by remember { mutableStateOf("") }
+    var course by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
@@ -59,7 +64,7 @@ fun StudentSignUpScreen(onNavigateToLogin: () -> Unit) {
         ) {
             Spacer(modifier = Modifier.height(40.dp))
 
-            // --- LOGO QUICKTAP ---
+            // --- QUICKTAP LOGO ---
             Image(
                 painter = painterResource(id = R.drawable.quicktap_logo),
                 contentDescription = "QuickTap Logo",
@@ -68,7 +73,7 @@ fun StudentSignUpScreen(onNavigateToLogin: () -> Unit) {
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Kotak Input Full Name
+            // Full Name Input
             OutlinedTextField(
                 value = fullName,
                 onValueChange = { fullName = it },
@@ -89,7 +94,7 @@ fun StudentSignUpScreen(onNavigateToLogin: () -> Unit) {
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Kotak Input Nickname
+            // Nickname Input
             OutlinedTextField(
                 value = nickname,
                 onValueChange = { nickname = it },
@@ -110,7 +115,7 @@ fun StudentSignUpScreen(onNavigateToLogin: () -> Unit) {
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Kotak Input Student ID
+            // Student ID Input
             OutlinedTextField(
                 value = studentId,
                 onValueChange = { studentId = it },
@@ -131,7 +136,28 @@ fun StudentSignUpScreen(onNavigateToLogin: () -> Unit) {
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Kotak Input Password
+            // Course Input
+            OutlinedTextField(
+                value = course,
+                onValueChange = { course = it },
+                label = { Text("Course", fontSize = 15.sp) },
+                textStyle = TextStyle(fontSize = 16.sp, color = Color.Black),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Color.White,
+                    unfocusedContainerColor = Color.White,
+                    disabledContainerColor = Color.White,
+                    focusedLabelColor = Color.White,
+                    unfocusedLabelColor = Color.DarkGray,
+                    focusedBorderColor = Color.White,
+                    unfocusedBorderColor = Color.LightGray
+                ),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp)
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Password Input
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
@@ -159,7 +185,7 @@ fun StudentSignUpScreen(onNavigateToLogin: () -> Unit) {
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Kotak Input Confirm Password
+            // Confirm Password Input
             OutlinedTextField(
                 value = confirmPassword,
                 onValueChange = { confirmPassword = it },
@@ -192,21 +218,22 @@ fun StudentSignUpScreen(onNavigateToLogin: () -> Unit) {
                     val nameInput = fullName.trim()
                     val nickInput = nickname.trim().ifEmpty { nameInput.substringBefore(" ") }
                     val inputId = studentId.trim()
+                    val courseInput = course.trim()
                     val cleanPassword = password.trim()
                     val cleanConfirmPassword = confirmPassword.trim()
 
-                    if (nameInput.isEmpty() || inputId.isEmpty() || cleanPassword.isEmpty() || cleanConfirmPassword.isEmpty()) {
-                        Toast.makeText(context, "Sila lengkapkan semua ruangan", Toast.LENGTH_SHORT).show()
+                    if (nameInput.isEmpty() || inputId.isEmpty() || courseInput.isEmpty() || cleanPassword.isEmpty() || cleanConfirmPassword.isEmpty()) {
+                        Toast.makeText(context, "Please complete all fields", Toast.LENGTH_SHORT).show()
                         return@Button
                     }
 
                     if (cleanPassword.length < 6) {
-                        Toast.makeText(context, "Password mesti sekurang-kurangnya 6 aksara", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Password must be at least 6 characters", Toast.LENGTH_SHORT).show()
                         return@Button
                     }
 
                     if (cleanPassword != cleanConfirmPassword) {
-                        Toast.makeText(context, "Password tidak sepadan!", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Passwords do not match!", Toast.LENGTH_SHORT).show()
                         return@Button
                     }
 
@@ -222,34 +249,57 @@ fun StudentSignUpScreen(onNavigateToLogin: () -> Unit) {
 
                                 val studentData = hashMapOf(
                                     "studentId" to cleanStudentId,
+                                    "studentNumber" to cleanStudentId,
                                     "name" to nameInput,
-                                    "fullName" to nameInput, // Diselaraskan untuk padanan skrin NFC
+                                    "fullName" to nameInput,
                                     "nickname" to nickInput,
                                     "email" to studentEmail,
-                                    "course" to "Bachelor of Information Technology",
-                                    "role" to "student"
+                                    "course" to courseInput,
+                                    "program" to courseInput,
+                                    "role" to "student",
+                                    "nfcUid" to "",
+                                    "cardUid" to ""
                                 )
 
-                                firestore.collection("users")
-                                    .document(uid)
-                                    .set(studentData)
+                                val batch = firestore.batch()
+                                val userDocRefByUid = firestore.collection("users").document(uid)
+                                val userDocRefById = firestore.collection("users").document(cleanStudentId)
+
+                                batch.set(userDocRefByUid, studentData)
+                                batch.set(userDocRefById, studentData)
+
+                                batch.commit()
                                     .addOnSuccessListener {
                                         isLoading = false
-                                        Toast.makeText(context, "Akaun Berjaya Dicipta!", Toast.LENGTH_SHORT).show()
-                                        onNavigateToLogin()
+                                        Toast.makeText(context, "Account Created Successfully!", Toast.LENGTH_SHORT).show()
+                                        // Immediately navigate to Home Dashboard upon successful signup
+                                        onNavigateToHome()
                                     }
                                     .addOnFailureListener { e ->
                                         isLoading = false
-                                        Toast.makeText(context, "Gagal simpan profil: ${e.message}", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, "Failed to save profile: ${e.message}", Toast.LENGTH_LONG).show()
                                     }
 
                             } else {
                                 isLoading = false
-                                Toast.makeText(
-                                    context,
-                                    "Daftar Gagal: ${task.exception?.localizedMessage}",
-                                    Toast.LENGTH_LONG
-                                ).show()
+                                val exception = task.exception
+                                if (exception is FirebaseAuthUserCollisionException) {
+                                    Toast.makeText(
+                                        context,
+                                        "Account already exists! Redirecting to home...",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                    coroutineScope.launch {
+                                        delay(1000)
+                                        onNavigateToHome()
+                                    }
+                                } else {
+                                    Toast.makeText(
+                                        context,
+                                        "Sign Up Failed: ${exception?.localizedMessage}",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
                             }
                         }
                 },
@@ -275,7 +325,7 @@ fun StudentSignUpScreen(onNavigateToLogin: () -> Unit) {
 
             Button(
                 onClick = {
-                    onNavigateToLogin()
+                    onNavigateToHome()
                 },
                 colors = ButtonDefaults.textButtonColors(),
                 modifier = Modifier.fillMaxWidth()

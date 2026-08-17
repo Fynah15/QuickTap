@@ -24,7 +24,6 @@ object WorkshopReminderManager {
             .get()
             .addOnSuccessListener { regDocuments ->
 
-
                 if (regDocuments.isEmpty) {
                     return@addOnSuccessListener
                 }
@@ -80,20 +79,20 @@ object WorkshopReminderManager {
 
                                     when {
                                         diffDays == 3L -> {
-                                            showLocalNotification(context, workshopName, "3 Hari Lagi", dateStr)
-                                            saveNotificationToFirestore(firestore, studentId, workshopName, "3 Hari Lagi", dateStr)
+                                            showLocalNotification(context, workshopName, "in 3 Days", dateStr)
+                                            saveNotificationToFirestore(firestore, studentId, workshopName, "in 3 Days", dateStr)
                                         }
                                         diffDays == 2L -> {
-                                            showLocalNotification(context, workshopName, "2 Hari Lagi", dateStr)
-                                            saveNotificationToFirestore(firestore, studentId, workshopName, "2 Hari Lagi", dateStr)
+                                            showLocalNotification(context, workshopName, "in 2 Days", dateStr)
+                                            saveNotificationToFirestore(firestore, studentId, workshopName, "in 2 Days", dateStr)
                                         }
                                         diffDays == 1L -> {
-                                            showLocalNotification(context, workshopName, "Esok!", dateStr)
-                                            saveNotificationToFirestore(firestore, studentId, workshopName, "Esok!", dateStr)
+                                            showLocalNotification(context, workshopName, "Tomorrow!", dateStr)
+                                            saveNotificationToFirestore(firestore, studentId, workshopName, "Tomorrow!", dateStr)
                                         }
                                         diffDays == 0L && diffMillis > 0 -> {
-                                            showLocalNotification(context, workshopName, "Hari Ini!", dateStr)
-                                            saveNotificationToFirestore(firestore, studentId, workshopName, "Hari Ini!", dateStr)
+                                            showLocalNotification(context, workshopName, "Today!", dateStr)
+                                            saveNotificationToFirestore(firestore, studentId, workshopName, "Today!", dateStr)
                                         }
                                     }
                                 }
@@ -105,17 +104,18 @@ object WorkshopReminderManager {
                 e.printStackTrace()
             }
     }
+
     private fun saveNotificationToFirestore(firestore: FirebaseFirestore, studentId: String, workshopName: String, timeRemaining: String, dateStr: String) {
         val notificationData = hashMapOf(
-            "title" to "Peringatan Bengkel: $workshopName",
-            "message" to "Bengkel anda akan bermula dalam $timeRemaining ($dateStr). Sila bersedia!",
+            "title" to "Workshop Reminder: $workshopName",
+            "message" to "Your workshop is starting $timeRemaining ($dateStr). Please get ready!",
             "timestamp" to System.currentTimeMillis(),
             "type" to "REMINDER"
         )
-        
+
         val todayStr = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())
         val docId = "rem_${studentId}_${workshopName.hashCode()}_$todayStr"
-        
+
         firestore.collection("users").document(studentId)
             .collection("notifications").document(docId).set(notificationData)
     }
@@ -132,16 +132,16 @@ object WorkshopReminderManager {
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val channel = NotificationChannel(channelId, "Peringatan Bengkel QuickTap", NotificationManager.IMPORTANCE_HIGH).apply {
-                    description = "Notifikasi automatik peringatan kehadiran bengkel"
+                val channel = NotificationChannel(channelId, "QuickTap Workshop Reminders", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "Automatic workshop attendance reminder notifications"
                 }
                 notificationManager.createNotificationChannel(channel)
             }
 
             val builder = NotificationCompat.Builder(context, channelId)
                 .setSmallIcon(android.R.drawable.ic_popup_reminder)
-                .setContentTitle("Peringatan Bengkel: $workshopName")
-                .setContentText("$timeRemaining ($dateStr). Jangan lupa untuk hadir!")
+                .setContentTitle("Workshop Reminder: $workshopName")
+                .setContentText("$timeRemaining ($dateStr). Don't forget to attend!")
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
 

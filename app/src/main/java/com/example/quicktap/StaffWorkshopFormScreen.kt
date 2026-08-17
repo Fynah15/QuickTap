@@ -10,8 +10,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -44,12 +42,13 @@ fun StaffWorkshopFormScreen(
 
     var showDeleteDialog by remember { mutableStateOf(false) }
     var isVenueExpanded by remember { mutableStateOf(false) }
+    var isCapacityExpanded by remember { mutableStateOf(false) }
     val venueOptions = listOf("Auditorium 1", "Auditorium 2", "Level 1, Lab 201", "Level 1, Lab 203", "Classroom 201", "Classroom 208", "Classroom 212", "Classroom 213")
+    val capacityOptions = (1..100).toList()
 
     val isEditMode = !workshopId.isNullOrEmpty()
     val calendar = Calendar.getInstance()
 
-    // 1. Sekatan Tarikh Lepas: Tetapkan minDate kepada masa semasa (hari ini)
     val datePickerDialog = DatePickerDialog(
         context,
         { _, y, m, d -> date = "$y-${m + 1}-$d" },
@@ -81,7 +80,7 @@ fun StaffWorkshopFormScreen(
     val dateLabel = if (currentLang == "ms") "Tarikh" else "Date"
     val startTimeLabel = if (currentLang == "ms") "Masa Mula" else "Start Time"
     val endTimeLabel = if (currentLang == "ms") "Masa Tamat" else "End Time"
-    val maxCapacityLabel = if (currentLang == "ms") "Kapasiti Maksimum: " else "Max Capacity: "
+    val maxCapacityLabel = if (currentLang == "ms") "Kapasiti Maksimum" else "Max Capacity"
     val updateBtnText = if (currentLang == "ms") "Kemas Kini Perubahan" else "Update Changes"
     val saveBtnText = if (currentLang == "ms") "Simpan Bengkel" else "Save Workshop"
     val deleteBtnText = if (currentLang == "ms") "Padam Bengkel" else "Delete Workshop"
@@ -99,6 +98,20 @@ fun StaffWorkshopFormScreen(
     val isDark = AppSettingsState.isDarkMode
     val backgroundColor = if (isDark) Color(0xFF121212) else Color(0xFFF9F9F9)
     val textColor = if (isDark) Color.White else Color.Black
+    val containerBgColor = if (isDark) Color(0xFF1E1E1E) else Color.White
+
+    // Force Light/Dark explicit color schemes for OutlinedTextField to eliminate Material3 purple tints
+    val textFieldColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = textColor,
+        unfocusedTextColor = textColor,
+        focusedContainerColor = containerBgColor,
+        unfocusedContainerColor = containerBgColor,
+        disabledContainerColor = containerBgColor,
+        focusedBorderColor = if (isDark) Color(0xFF912323) else Color(0xFF4A90E2),
+        unfocusedBorderColor = if (isDark) Color.Gray else Color.LightGray,
+        focusedLabelColor = if (isDark) Color(0xFF912323) else Color(0xFF4A90E2),
+        unfocusedLabelColor = if (isDark) Color.Gray else Color.DarkGray
+    )
 
     LaunchedEffect(workshopId) {
         if (isEditMode && workshopId != null) {
@@ -145,12 +158,7 @@ fun StaffWorkshopFormScreen(
                 onValueChange = { title = it },
                 label = { Text(titleLabel) },
                 modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = textColor,
-                    unfocusedTextColor = textColor,
-                    focusedLabelColor = if (isDark) Color(0xFF912323) else Color.Gray,
-                    unfocusedLabelColor = if (isDark) Color.Gray else Color.DarkGray
-                )
+                colors = textFieldColors
             )
 
             OutlinedTextField(
@@ -158,12 +166,7 @@ fun StaffWorkshopFormScreen(
                 onValueChange = { description = it },
                 label = { Text(descLabel) },
                 modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = textColor,
-                    unfocusedTextColor = textColor,
-                    focusedLabelColor = if (isDark) Color(0xFF912323) else Color.Gray,
-                    unfocusedLabelColor = if (isDark) Color.Gray else Color.DarkGray
-                )
+                colors = textFieldColors
             )
 
             ExposedDropdownMenuBox(
@@ -177,20 +180,16 @@ fun StaffWorkshopFormScreen(
                     label = { Text(venueLabel) },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isVenueExpanded) },
                     modifier = Modifier.fillMaxWidth().menuAnchor(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = textColor,
-                        unfocusedTextColor = textColor,
-                        focusedLabelColor = if (isDark) Color(0xFF912323) else Color.Gray,
-                        unfocusedLabelColor = if (isDark) Color.Gray else Color.DarkGray
-                    )
+                    colors = textFieldColors
                 )
                 ExposedDropdownMenu(
                     expanded = isVenueExpanded,
-                    onDismissRequest = { isVenueExpanded = false }
+                    onDismissRequest = { isVenueExpanded = false },
+                    modifier = Modifier.background(containerBgColor)
                 ) {
                     venueOptions.forEach { selectionOption ->
                         DropdownMenuItem(
-                            text = { Text(selectionOption) },
+                            text = { Text(selectionOption, color = textColor) },
                             onClick = {
                                 location = selectionOption
                                 isVenueExpanded = false
@@ -207,15 +206,9 @@ fun StaffWorkshopFormScreen(
                 label = { Text(dateLabel) },
                 modifier = Modifier.fillMaxWidth(),
                 trailingIcon = { IconButton(onClick = { datePickerDialog.show() }) { Icon(Icons.Default.DateRange, null, tint = if (isDark) Color.LightGray else Color.Gray) } },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = textColor,
-                    unfocusedTextColor = textColor,
-                    focusedLabelColor = if (isDark) Color(0xFF912323) else Color.Gray,
-                    unfocusedLabelColor = if (isDark) Color.Gray else Color.DarkGray
-                )
+                colors = textFieldColors
             )
 
-            // 2. Masa Mula & Tamat: Disusun sebaris dengan saiz teks label disesuaikan supaya muat
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -227,12 +220,7 @@ fun StaffWorkshopFormScreen(
                     label = { Text(startTimeLabel, fontSize = 12.sp) },
                     modifier = Modifier.weight(1f),
                     trailingIcon = { IconButton(onClick = { startTimePickerDialog.show() }) { Icon(Icons.Default.DateRange, null, tint = if (isDark) Color.LightGray else Color.Gray) } },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = textColor,
-                        unfocusedTextColor = textColor,
-                        focusedLabelColor = if (isDark) Color(0xFF912323) else Color.Gray,
-                        unfocusedLabelColor = if (isDark) Color.Gray else Color.DarkGray
-                    )
+                    colors = textFieldColors
                 )
                 OutlinedTextField(
                     value = endTime,
@@ -241,20 +229,38 @@ fun StaffWorkshopFormScreen(
                     label = { Text(endTimeLabel, fontSize = 12.sp) },
                     modifier = Modifier.weight(1f),
                     trailingIcon = { IconButton(onClick = { endTimePickerDialog.show() }) { Icon(Icons.Default.DateRange, null, tint = if (isDark) Color.LightGray else Color.Gray) } },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = textColor,
-                        unfocusedTextColor = textColor,
-                        focusedLabelColor = if (isDark) Color(0xFF912323) else Color.Gray,
-                        unfocusedLabelColor = if (isDark) Color.Gray else Color.DarkGray
-                    )
+                    colors = textFieldColors
                 )
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(maxCapacityLabel, color = textColor)
-                IconButton(onClick = { if (maxCapacity > 0) maxCapacity-- }) { Icon(Icons.Default.KeyboardArrowDown, null, tint = textColor) }
-                Text(maxCapacity.toString(), fontWeight = FontWeight.Bold, color = textColor)
-                IconButton(onClick = { maxCapacity++ }) { Icon(Icons.Default.KeyboardArrowUp, null, tint = textColor) }
+            ExposedDropdownMenuBox(
+                expanded = isCapacityExpanded,
+                onExpandedChange = { isCapacityExpanded = !isCapacityExpanded }
+            ) {
+                OutlinedTextField(
+                    value = if (maxCapacity > 0) maxCapacity.toString() else "",
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text(maxCapacityLabel) },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isCapacityExpanded) },
+                    modifier = Modifier.fillMaxWidth().menuAnchor(),
+                    colors = textFieldColors
+                )
+                ExposedDropdownMenu(
+                    expanded = isCapacityExpanded,
+                    onDismissRequest = { isCapacityExpanded = false },
+                    modifier = Modifier.heightIn(max = 200.dp).background(containerBgColor)
+                ) {
+                    capacityOptions.forEach { capacity ->
+                        DropdownMenuItem(
+                            text = { Text(capacity.toString(), color = textColor) },
+                            onClick = {
+                                maxCapacity = capacity
+                                isCapacityExpanded = false
+                            }
+                        )
+                    }
+                }
             }
 
             Button(

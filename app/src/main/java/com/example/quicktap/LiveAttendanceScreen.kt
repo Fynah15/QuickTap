@@ -96,12 +96,10 @@ fun LiveAttendanceScreen(
                     val formattedCheckIn = parseTimestampToTime(timestampField)
                     val formattedCheckOut = parseTimestampToTime(checkOutTimeField)
 
-                    // PENAPISAN KETAT: Jika pelajar belum buat tap sama sekali, abaikan!
                     if (formattedCheckIn == "-" && formattedCheckOut == "-") {
                         continue
                     }
 
-                    // Ambil pelbagai kemungkinan medan nama daripada dokumen pendaftaran
                     val rawStudentName = doc.getString("studentName")
                         ?: doc.getString("name")
                         ?: doc.getString("fullName")
@@ -109,14 +107,12 @@ fun LiveAttendanceScreen(
 
                     val studentId = doc.getString("studentId") ?: doc.getString("userId") ?: doc.id.substringAfter("_")
 
-                    // Semak sama ada nama yang ada sah (bukan teks kosong atau kod UID/Matrix)
                     val isInvalidName = rawStudentName.isNullOrBlank() ||
                             rawStudentName.length > 20 && rawStudentName.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' || it == '-' } ||
                             rawStudentName == studentId
 
-                    val finalDisplayName = if (!isInvalidName) rawStudentName.orEmpty() else "Memuatkan nama..."
+                    val finalDisplayName = if (!isInvalidName) rawStudentName!! else "Memuatkan nama..."
 
-                    // Jika nama tidak sah atau "Memuatkan nama...", cuba buat query tambahan secara dinamik untuk ambil dari koleksi "users"
                     if ((isInvalidName || finalDisplayName == "Memuatkan nama...") && studentId.isNotBlank()) {
                         firestore.collection("users").document(studentId).get()
                             .addOnSuccessListener { userDoc ->
@@ -127,7 +123,6 @@ fun LiveAttendanceScreen(
                                         ?: userDoc.getString("nickname")
 
                                     if (!realName.isNullOrBlank()) {
-                                        // Kemas kini semula state senarai jika nama sebenar dijumpai
                                         studentMap[studentId]?.let { row ->
                                             row.name = realName
                                             studentList = studentMap.values.toList().sortedBy { it.name }

@@ -1,17 +1,23 @@
 package com.example.quicktap
 
+import android.app.Activity
 import android.net.Uri
+import android.nfc.NfcAdapter
+import android.nfc.Tag
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Nfc
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,7 +27,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -33,21 +38,24 @@ import com.google.firebase.storage.FirebaseStorage
 @Composable
 fun EditProfileScreen(onBackClick: () -> Unit) {
     val context = LocalContext.current
+    val activity = context as? Activity
     val auth = FirebaseAuth.getInstance()
     val firestore = FirebaseFirestore.getInstance()
     val storage = FirebaseStorage.getInstance()
     val currentUser = auth.currentUser
 
     var email by remember { mutableStateOf("") }
-    var phone by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
     var fullName by remember { mutableStateOf("") }
     var studentId by remember { mutableStateOf("") }
     var program by remember { mutableStateOf("Bachelor of Information Technology") }
+    var cardUid by remember { mutableStateOf("") }
     var profileImageUrl by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
 
-    // State untuk pilih gambar dari galeri
+    // State for NFC
+    var isListeningNfc by remember { mutableStateOf(false) }
+    var hasScannedNewCard by remember { mutableStateOf(false) }
+
     var imageUri by remember { mutableStateOf<Uri?>(null) }
     val imageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -57,36 +65,66 @@ fun EditProfileScreen(onBackClick: () -> Unit) {
         }
     }
 
-    // Ambil data profil sebenar dari Firestore semasa skrin dibuka
+    // Fetch latest user data from Firestore collection 'users' based on current user UID
     LaunchedEffect(currentUser) {
         currentUser?.uid?.let { uid ->
             firestore.collection("users").document(uid).get()
                 .addOnSuccessListener { document ->
                     if (document.exists()) {
-                        fullName = document.getString("name") ?: "Nursyafinah Binti Hamdan"
-                        studentId = document.getString("studentId") ?: "202209020204"
+                        fullName = document.getString("fullName") ?: document.getString("name") ?: ""
+                        studentId = document.getString("studentId") ?: document.getString("studentNumber") ?: ""
                         email = document.getString("email") ?: (currentUser.email ?: "")
-                        phone = document.getString("phone") ?: ""
-                        program = document.getString("program") ?: "Bachelor of Information Technology"
+                        program = document.getString("course") ?: document.getString("program") ?: "Bachelor of Information Technology"
+                        // Support both cardUid and nfcUid fields from database
+                        cardUid = document.getString("cardUid") ?: document.getString("nfcUid") ?: ""
                         profileImageUrl = document.getString("profileImageUrl") ?: ""
                     }
                 }
         }
     }
 
-    // 1. Sokongan Bahasa Dinamik
+    // Function to read physical NFC card using Android NfcAdapter
+    val nfcAdapter = remember { NfcAdapter.getDefaultAdapter(context) }
+
+    DisposableEffect(isListeningNfc) {
+        if (isListeningNfc && nfcAdapter != null && activity != null) {
+            val readerCallback = NfcAdapter.ReaderCallback { tag: Tag ->
+                val tagId = tag.id
+                val hexUid = tagId.joinToString("") { "%02X".format(it) }
+
+                activity.runOnUiThread {
+                    cardUid = hexUid
+                    isListeningNfc = false
+                    hasScannedNewCard = true
+                    Toast.makeText(context, "Card Scanned Successfully!", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            val flags = NfcAdapter.FLAG_READER_NFC_A or
+                    NfcAdapter.FLAG_READER_NFC_B or
+                    NfcAdapter.FLAG_READER_NFC_F or
+                    NfcAdapter.FLAG_READER_NFC_V
+
+            nfcAdapter.enableReaderMode(activity, readerCallback, flags, null)
+        }
+
+        onDispose {
+            if (nfcAdapter != null && activity != null) {
+                nfcAdapter.disableReaderMode(activity)
+            }
+        }
+    }
+
     val currentLang = AppSettingsState.currentLanguage
     val editProfileTitle = if (currentLang == "ms") "Sunting Profil" else "Edit Profile"
     val accountText = if (currentLang == "ms") "Akaun" else "Account"
     val universityNameText = "CITY UNIVERSITY MALAYSIA"
     val studentIdLabelText = if (currentLang == "ms") "ID PELAJAR" else "STUDENT ID"
 
-    val emailLabel = if (currentLang == "ms") "Emel" else "Email"
-    val phoneLabel = if (currentLang == "ms") "Nombor telefon bimbit" else "Mobile phone"
-    val passwordLabel = if (currentLang == "ms") "Kata laluan baharu (Kosongkan jika tidak tukar)" else "New password (Leave blank if unchanged)"
+    val emailLabel = if (currentLang == "ms") "Email" else "Email"
+    val cardUidLabel = if (currentLang == "ms") "Status Kad NFC Fizikal" else "Physical NFC Card Status"
     val saveProfileText = if (currentLang == "ms") "Simpan Profil" else "Save Profile"
 
-    // 2. Sokongan Tema Gelap / Cerah
     val isDark = AppSettingsState.isDarkMode
     val backgroundColor = if (isDark) Color(0xFF121212) else Color.White
     val cardBackground = if (isDark) Color(0xFF1E1E1E) else Color.White
@@ -109,19 +147,21 @@ fun EditProfileScreen(onBackClick: () -> Unit) {
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF912323))
             )
-        }
+        },
+        containerColor = backgroundColor
     ) { paddingValues ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(backgroundColor)
                 .padding(paddingValues)
+                .imePadding()
+                .verticalScroll(rememberScrollState())
                 .padding(20.dp)
         ) {
             Text(accountText, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = textColor)
             Spacer(modifier = Modifier.height(8.dp))
 
-            // --- KAD ID CITY UNIVERSITY MALAYSIA ---
+            // Student Digital ID Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(4.dp),
@@ -147,7 +187,6 @@ fun EditProfileScreen(onBackClick: () -> Unit) {
                         modifier = Modifier.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Bahagian Gambar Profil (Boleh klik untuk tukar)
                         Box(
                             modifier = Modifier
                                 .size(55.dp)
@@ -187,13 +226,13 @@ fun EditProfileScreen(onBackClick: () -> Unit) {
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Text(
-                                fullName.ifEmpty { "Nursyafinah Binti Hamdan" },
+                                fullName.ifEmpty { "User Name" },
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp,
                                 color = textColor
                             )
                             Text(
-                                studentId.ifEmpty { "202209020204" },
+                                studentId.ifEmpty { "Student ID" },
                                 color = secondaryTextColor,
                                 fontSize = 11.sp
                             )
@@ -219,7 +258,7 @@ fun EditProfileScreen(onBackClick: () -> Unit) {
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // --- RUANGAN INPUT EDIT ---
+            // Email Field
             Text(emailLabel, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = textColor)
             Spacer(modifier = Modifier.height(4.dp))
             OutlinedTextField(
@@ -234,90 +273,145 @@ fun EditProfileScreen(onBackClick: () -> Unit) {
                 )
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            Text(phoneLabel, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = textColor)
+            // Physical NFC Card Status
+            Text(cardUidLabel, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = textColor)
             Spacer(modifier = Modifier.height(4.dp))
-            OutlinedTextField(
-                value = phone, onValueChange = { phone = it },
-                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = textColor),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color(0xFF4A90E2),
-                    unfocusedBorderColor = secondaryTextColor,
-                    focusedTextColor = textColor,
-                    unfocusedTextColor = textColor
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = when {
+                        isListeningNfc -> Color(0xFFD32F2F)
+                        hasScannedNewCard -> Color(0xFF2E7D32)
+                        else -> Color(0xFF757575)
+                    }
                 )
-            )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Nfc,
+                            contentDescription = "NFC Icon",
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = when {
+                                    isListeningNfc -> if (currentLang == "ms") "Sila tap kad di belakang telefon..." else "Tap card on back of phone..."
+                                    hasScannedNewCard -> if (currentLang == "ms") "Kad Fizikal Berjaya Di-scan" else "Physical Card Scanned"
+                                    else -> if (currentLang == "ms") "Tiada Kad Diimbas (Belum Paut)" else "No Card Scanned"
+                                },
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                            Text(
+                                text = when {
+                                    isListeningNfc -> if (currentLang == "ms") "Tunggu sebentar..." else "Waiting..."
+                                    hasScannedNewCard -> if (currentLang == "ms") "Tekan simpan untuk kemaskini" else "Press save to update"
+                                    else -> if (currentLang == "ms") "Tekan butang imbas untuk pautan" else "Press scan to link card"
+                                },
+                                color = Color.White.copy(alpha = 0.8f),
+                                fontSize = 10.sp
+                            )
+                        }
+                    }
 
-            Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = {
+                            if (isListeningNfc) {
+                                isListeningNfc = false
+                                Toast.makeText(context, "Scan cancelled", Toast.LENGTH_SHORT).show()
+                            } else {
+                                if (nfcAdapter == null) {
+                                    Toast.makeText(context, "This device does not support NFC!", Toast.LENGTH_LONG).show()
+                                } else if (!nfcAdapter.isEnabled) {
+                                    Toast.makeText(context, "Please enable NFC in your phone settings.", Toast.LENGTH_LONG).show()
+                                } else {
+                                    isListeningNfc = true
+                                    Toast.makeText(context, "Please tap physical card on the back of phone...", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text(
+                            text = if (isListeningNfc) (if (currentLang == "ms") "Batal" else "Cancel") else (if (currentLang == "ms") "Imbas" else "Scan"),
+                            color = Color.Black,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            }
 
-            Text(passwordLabel, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = textColor)
-            Spacer(modifier = Modifier.height(4.dp))
-            OutlinedTextField(
-                value = password, onValueChange = { password = it },
-                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp),
-                visualTransformation = PasswordVisualTransformation(),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = textColor),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color(0xFF4A90E2),
-                    unfocusedBorderColor = secondaryTextColor,
-                    focusedTextColor = textColor,
-                    unfocusedTextColor = textColor
-                )
-            )
+            Spacer(modifier = Modifier.height(30.dp))
 
-            Spacer(modifier = Modifier.weight(1f))
-
-            // --- BUTANG SAVE ---
+            // Save Profile Button
             Button(
                 onClick = {
                     val uid = currentUser?.uid
                     if (uid == null) {
-                        Toast.makeText(context, "Sila log masuk semula.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Please log in again.", Toast.LENGTH_SHORT).show()
                         return@Button
                     }
 
                     isLoading = true
 
-                    // Fungsi pembantu untuk kemaskini Firestore
                     val updateFirestoreData: (String?) -> Unit = { imageUrl ->
                         val updatedData = mutableMapOf<String, Any>(
                             "email" to email,
-                            "phone" to phone
+                            "course" to program,
+                            "program" to program
                         )
+
+                        // Save to BOTH cardUid and nfcUid so staff scanner catches it instantly regardless of key used
+                        if (cardUid.isNotEmpty()) {
+                            updatedData["cardUid"] = cardUid
+                            updatedData["nfcUid"] = cardUid
+                        }
+
                         if (!imageUrl.isNullOrEmpty()) {
                             updatedData["profileImageUrl"] = imageUrl
                         }
 
-                        firestore.collection("users").document(uid)
-                            .update(updatedData)
+                        // Update both the UID document and Student ID document to ensure complete synchronization
+                        val batch = firestore.batch()
+                        val userDocByUid = firestore.collection("users").document(uid)
+                        batch.update(userDocByUid, updatedData)
+
+                        if (studentId.isNotEmpty()) {
+                            val userDocById = firestore.collection("users").document(studentId)
+                            batch.set(userDocById, updatedData, com.google.firebase.firestore.SetOptions.merge())
+                        }
+
+                        batch.commit()
                             .addOnSuccessListener {
-                                // Semak jika ada perubahan kata laluan
-                                if (password.isNotEmpty() && password.length >= 6) {
-                                    currentUser.updatePassword(password)
-                                        .addOnCompleteListener { passTask ->
-                                            isLoading = false
-                                            if (passTask.isSuccessful) {
-                                                Toast.makeText(context, "Profil & Kata Laluan Berjaya Dikemaskini!", Toast.LENGTH_SHORT).show()
-                                                onBackClick()
-                                            } else {
-                                                Toast.makeText(context, "Ralat kemaskini kata laluan: ${passTask.exception?.localizedMessage}", Toast.LENGTH_LONG).show()
-                                            }
-                                        }
-                                } else {
-                                    isLoading = false
-                                    Toast.makeText(context, "Profil Berjaya Dikemaskini!", Toast.LENGTH_SHORT).show()
-                                    onBackClick()
-                                }
+                                isLoading = false
+                                Toast.makeText(context, "Profile & NFC Status Saved Successfully!", Toast.LENGTH_SHORT).show()
+                                onBackClick()
                             }
                             .addOnFailureListener { e ->
                                 isLoading = false
-                                Toast.makeText(context, "Gagal simpan ke database: ${e.message}", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, "Failed to save: ${e.message}", Toast.LENGTH_LONG).show()
                             }
                     }
 
-                    // Logik muat naik gambar ke Firebase Storage jika gambar baharu dipilih
                     if (imageUri != null) {
                         val storageRef = storage.reference.child("profile_images/$uid.jpg")
                         storageRef.putFile(imageUri!!)
@@ -326,15 +420,14 @@ fun EditProfileScreen(onBackClick: () -> Unit) {
                                     updateFirestoreData(downloadUri.toString())
                                 }.addOnFailureListener { e ->
                                     isLoading = false
-                                    Toast.makeText(context, "Gagal dapatkan pautan gambar: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Failed to get image link: ${e.message}", Toast.LENGTH_SHORT).show()
                                 }
                             }
                             .addOnFailureListener { e ->
                                 isLoading = false
-                                Toast.makeText(context, "Gagal muat naik gambar: ${e.message}", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Failed to upload image: ${e.message}", Toast.LENGTH_SHORT).show()
                             }
                     } else {
-                        // Teruskan kemaskini Firestore tanpa tukar gambar
                         updateFirestoreData(null)
                     }
                 },
@@ -355,6 +448,8 @@ fun EditProfileScreen(onBackClick: () -> Unit) {
                     Text(saveProfileText, color = Color.White, fontWeight = FontWeight.Bold)
                 }
             }
+
+            Spacer(modifier = Modifier.height(100.dp))
         }
     }
 }

@@ -1,5 +1,12 @@
 package com.example.quicktap
 
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -13,9 +20,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
@@ -35,6 +45,7 @@ fun NotificationHistoryScreen(onBackClick: () -> Unit) {
     val firestore = FirebaseFirestore.getInstance()
     val auth = FirebaseAuth.getInstance()
     val currentUser = auth.currentUser
+    val context = LocalContext.current
 
     var notifications by remember { mutableStateOf<List<NotificationItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -49,30 +60,112 @@ fun NotificationHistoryScreen(onBackClick: () -> Unit) {
     val textColor = if (isDark) Color.White else Color.Black
     val secondaryTextColor = if (isDark) Color.LightGray else Color.Gray
 
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) {}
+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        createNotificationChannel(context)
+    }
+
+    // Helper function to fire local push alerts safely
+    fun showLocalNotification(title: String, message: String) {
+        val builder = NotificationCompat.Builder(context, "QUICKTAP_CHANNEL_ID")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+
+        with(NotificationManagerCompat.from(context)) {
+            try {
+                notify(System.currentTimeMillis().toInt(), builder.build())
+            } catch (e: SecurityException) {
+                // Permission not granted for notifications
+            }
+        }
+    }
+
+    // Load data with robust snapshot tracking for local popups
     LaunchedEffect(currentUser) {
         val uid = currentUser?.uid
         if (uid != null) {
+            // Listen to user-specific subcollection
             firestore.collection("users").document(uid).collection("notifications")
                 .orderBy("timestamp", Query.Direction.DESCENDING)
-                .get()
-                .addOnSuccessListener { snapshot ->
-                    notifications = snapshot.documents.map { doc ->
-                        NotificationItem(
-                            id = doc.id,
-                            title = doc.getString("title") ?: "Notification",
-                            message = doc.getString("message") ?: "",
-                            timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
-                        )
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        isLoading = false
+                        return@addSnapshotListener
                     }
-                    isLoading = false
-                }
-                .addOnFailureListener {
-                    // Fallback to static if no collection yet
-                    notifications = listOf(
-                        NotificationItem("1", "Welcome", "Welcome to QuickTap!", System.currentTimeMillis()),
-                        NotificationItem("2", "Workshop Reminder", "Upcoming workshop in 3 days.", System.currentTimeMillis() - 86400000)
-                    )
-                    isLoading = false
+
+                    if (snapshot != null && !snapshot.isEmpty) {
+                        val newNotifications = snapshot.documents.map { doc ->
+                            NotificationItem(
+                                id = doc.id,
+                                title = doc.getString("title") ?: "Notification",
+                                message = doc.getString("message") ?: "",
+                                timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
+                            )
+                        }
+
+                        // Check document modifications to trigger popup for newly added items
+                        snapshot.documentChanges.forEach { change ->
+                            if (change.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
+                                val doc = change.document
+                                val title = doc.getString("title") ?: "Notification"
+                                val message = doc.getString("message") ?: ""
+                                val timestamp = doc.getLong("timestamp") ?: 0L
+
+                                // Only trigger if the notification is recent (e.g., created within the last 10 seconds)
+                                // This prevents popping up old history items when the screen first loads.
+                                if (System.currentTimeMillis() - timestamp < 10000) {
+                                    showLocalNotification(title, message)
+                                }
+                            }
+                        }
+
+                        notifications = newNotifications
+                        isLoading = false
+                    } else {
+                        // Fallback to global notifications if user subcollection is empty
+                        firestore.collection("notifications")
+                            .orderBy("timestamp", Query.Direction.DESCENDING)
+                            .addSnapshotListener { globalSnapshot, globalError ->
+                                if (globalError != null) {
+                                    isLoading = false
+                                    return@addSnapshotListener
+                                }
+
+                                if (globalSnapshot != null) {
+                                    globalSnapshot.documentChanges.forEach { change ->
+                                        if (change.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
+                                            val doc = change.document
+                                            val title = doc.getString("title") ?: "Notification"
+                                            val message = doc.getString("message") ?: ""
+                                            val timestamp = doc.getLong("timestamp") ?: 0L
+
+                                            if (System.currentTimeMillis() - timestamp < 10000) {
+                                                showLocalNotification(title, message)
+                                            }
+                                        }
+                                    }
+
+                                    notifications = globalSnapshot.documents.map { doc ->
+                                        NotificationItem(
+                                            id = doc.id,
+                                            title = doc.getString("title") ?: "Notification",
+                                            message = doc.getString("message") ?: "",
+                                            timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
+                                        )
+                                    }
+                                }
+                                isLoading = false
+                            }
+                    }
                 }
         } else {
             isLoading = false
@@ -92,33 +185,65 @@ fun NotificationHistoryScreen(onBackClick: () -> Unit) {
             )
         }
     ) { paddingValues ->
-        Box(modifier = Modifier.fillMaxSize().background(backgroundColor).padding(paddingValues)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(backgroundColor)
+                .padding(paddingValues)
+        ) {
             if (isLoading) {
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Color(0xFF912323))
+                CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center),
+                    color = Color(0xFF912323)
+                )
             } else if (notifications.isEmpty()) {
-                Text(noNotifText, modifier = Modifier.align(Alignment.Center), color = secondaryTextColor)
+                Text(
+                    text = noNotifText,
+                    modifier = Modifier.align(Alignment.Center),
+                    color = secondaryTextColor,
+                    fontSize = 14.sp
+                )
             } else {
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(16.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(notifications) { item ->
+                    items(notifications, key = { it.id }) { item ->
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = cardColor),
                             shape = RoundedCornerShape(8.dp),
                             elevation = CardDefaults.cardElevation(2.dp)
                         ) {
-                            Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Notifications, contentDescription = null, tint = Color(0xFF912323), modifier = Modifier.size(24.dp))
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Notifications,
+                                    contentDescription = null,
+                                    tint = Color(0xFF912323),
+                                    modifier = Modifier.size(24.dp)
+                                )
                                 Spacer(modifier = Modifier.width(16.dp))
                                 Column {
-                                    Text(item.title, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = textColor)
+                                    Text(
+                                        text = item.title,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        color = textColor
+                                    )
                                     Spacer(modifier = Modifier.height(4.dp))
-                                    Text(item.message, fontSize = 13.sp, color = secondaryTextColor)
+                                    Text(
+                                        text = item.message,
+                                        fontSize = 13.sp,
+                                        color = secondaryTextColor
+                                    )
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date(item.timestamp)),
+                                        text = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date(item.timestamp)),
                                         fontSize = 11.sp,
                                         color = secondaryTextColor.copy(alpha = 0.7f)
                                     )
@@ -129,5 +254,18 @@ fun NotificationHistoryScreen(onBackClick: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+fun createNotificationChannel(context: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val name = "QuickTap Notifications"
+        val descriptionText = "Workshop and System Updates"
+        val importance = NotificationManager.IMPORTANCE_HIGH
+        val channel = NotificationChannel("QUICKTAP_CHANNEL_ID", name, importance).apply {
+            description = descriptionText
+        }
+        val notificationManager = context.getSystemService(NotificationManager::class.java)
+        notificationManager.createNotificationChannel(channel)
     }
 }

@@ -41,8 +41,8 @@ fun StaffDashboardScreen(
     var activeWorkshopId by remember { mutableStateOf<String?>(null) }
     var activeWorkshopName by remember { mutableStateOf("No Active Workshop") }
 
-    // State untuk data statistik pendaftaran & kehadiran
-    var totalRegistered by remember { mutableStateOf(0) }
+    // State untuk data statistik jumlah keseluruhan bengkel & kehadiran
+    var totalWorkshopsCount by remember { mutableStateOf(0) }
     var totalPresent by remember { mutableStateOf(0) }
     var totalAbsent by remember { mutableStateOf(0) }
     var attendancePercentage by remember { mutableStateOf(0f) }
@@ -63,7 +63,7 @@ fun StaffDashboardScreen(
     val settingsNav = if (currentLang == "ms") "Tetapan" else "Settings"
 
     val statisticsTitle = if (currentLang == "ms") "Statistik" else "Statistics"
-    val totalRegisteredLabel = if (currentLang == "ms") "Jumlah Berdaftar" else "Total Registered"
+    val totalWorkshopLabel = if (currentLang == "ms") "Jumlah Bengkel" else "Total Workshop"
     val attendanceTodayLabel = if (currentLang == "ms") "Kehadiran Hari Ini" else "Attendance Today"
     val presentLabel = if (currentLang == "ms") "Hadir" else "Present"
     val absentLabel = if (currentLang == "ms") "Tidak Hadir" else "Absent"
@@ -91,6 +91,19 @@ fun StaffDashboardScreen(
     val secondaryTextColor = if (isDark) Color.LightGray else Color.Gray
     val presentBoxBg = if (isDark) Color(0xFF1E3A24) else Color(0xFFE2F5E1)
     val absentBoxBg = if (isDark) Color(0xFF4A2222) else Color(0xFFFDEAEA)
+
+    // Dapatkan jumlah keseluruhan bengkel secara Real-Time dari koleksi "workshops"
+    DisposableEffect(Unit) {
+        val allWorkshopsListener = firestore.collection("workshops")
+            .addSnapshotListener { snapshot, error ->
+                if (error == null && snapshot != null) {
+                    totalWorkshopsCount = snapshot.size()
+                }
+            }
+        onDispose {
+            allWorkshopsListener.remove()
+        }
+    }
 
     // Muat turun data bengkel TERKINI (Latest workshop) secara Real-Time dari Firestore
     DisposableEffect(currentUser) {
@@ -142,7 +155,6 @@ fun StaffDashboardScreen(
                         if (checkOutTimestamp != null) checkOutCount++
                     }
 
-                    totalRegistered = total
                     totalPresent = presentCount
                     totalAbsent = absentCount
                     totalCheckedIn = checkInCount
@@ -168,7 +180,6 @@ fun StaffDashboardScreen(
                         } else {
                             activeWorkshopId = null
                             activeWorkshopName = noActiveWorkshopText
-                            totalRegistered = 0
                             totalPresent = 0
                             totalAbsent = 0
                             totalCheckedIn = 0
@@ -191,7 +202,6 @@ fun StaffDashboardScreen(
 
     Scaffold(
         topBar = {
-            // Diluaskan padding menegak (vertical = 18.dp) dan ditambah penjarakan selamat agar tidak terlindung
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -290,7 +300,7 @@ fun StaffDashboardScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Total Students Registered Card
+                // Total Workshop Card (Ditukar daripada Total Registered kepada Total Workshop)
                 Card(
                     modifier = Modifier.weight(1f).height(100.dp),
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF801A1A)),
@@ -302,7 +312,7 @@ fun StaffDashboardScreen(
                         verticalArrangement = Arrangement.Center
                     ) {
                         Text(
-                            text = totalRegisteredLabel,
+                            text = totalWorkshopLabel,
                             color = Color.White.copy(alpha = 0.9f),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -311,7 +321,7 @@ fun StaffDashboardScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(text = "$totalRegistered", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                        Text(text = "$totalWorkshopsCount", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
@@ -403,7 +413,6 @@ fun StaffDashboardScreen(
                     }
                     Spacer(modifier = Modifier.width(16.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        // Paparan Nama Tajuk Bengkel Sebenar Secara Real-Time
                         Text(
                             text = activeWorkshopName,
                             fontWeight = FontWeight.Bold,

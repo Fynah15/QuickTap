@@ -56,7 +56,6 @@ fun CertificateManagementScreen(
     val currentLang = AppSettingsState.currentLanguage
     val titleText = if (currentLang == "ms") "Pengurusan Sijil" else "Certificate Management"
     val noStudentsText = if (currentLang == "ms") "Tiada pelajar yang layak ditemui." else "No eligible students found."
-    val sentText = if (currentLang == "ms") "Hantar" else "Sent"
     val actionSendText = if (currentLang == "ms") "Hantar" else "Send"
     val autoGenText = if (currentLang == "ms") "Jana Semua Secara Automatik" else "Auto Generate All"
 

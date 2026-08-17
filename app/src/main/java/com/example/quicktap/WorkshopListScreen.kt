@@ -73,13 +73,13 @@ fun WorkshopListScreen(
     var fallbackStudentId by remember { mutableStateOf("") }
 
     val currentLang = AppSettingsState.currentLanguage
-    val workshopsTitle = if (currentLang == "ms") "Bengkel" else "Workshops"
     val searchPlaceholder = if (currentLang == "ms") "Cari bengkel..." else "Search workshops..."
 
     val tabAll = if (currentLang == "ms") "Semua" else "All"
     val tabToday = if (currentLang == "ms") "Hari Ini" else "Today"
     val tabWeek = if (currentLang == "ms") "Minggu Ini" else "This week"
     val tabUpcoming = if (currentLang == "ms") "Akan Datang" else "Upcoming"
+    val tabPast = if (currentLang == "ms") "Telah Tamat" else "Past"
 
     val navHome = if (currentLang == "ms") "Utama" else "Home"
     val navWorkshop = if (currentLang == "ms") "Bengkel" else "Workshop"
@@ -147,7 +147,8 @@ fun WorkshopListScreen(
                                 isRegistered = registeredWorkshopIds.contains(wId),
                                 isPast = isPastDate(wDate)
                             )
-                        }
+                        }.sortedByDescending { parseDate(it.date)?.time ?: 0L } // Tersusun dari tarikh paling lewat ke terawal
+
                         workshopList.addAll(newList)
                         isLoading = false
                     }
@@ -165,6 +166,7 @@ fun WorkshopListScreen(
                 "Today" -> isSameDay(workshop.date, Date())
                 "This week" -> isWithinThisWeek(workshop.date)
                 "Upcoming" -> isFutureDate(workshop.date)
+                "Past" -> workshop.isPast
                 else -> true
             }
             matchesSearch && matchesTab
@@ -172,17 +174,6 @@ fun WorkshopListScreen(
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(workshopsTitle, color = Color.White, fontSize = 16.sp) },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF912323))
-            )
-        },
         bottomBar = {
             NavigationBar(
                 containerColor = Color(0xFF912323),
@@ -269,12 +260,13 @@ fun WorkshopListScreen(
                 Pair("All", tabAll),
                 Pair("Today", tabToday),
                 Pair("This week", tabWeek),
-                Pair("Upcoming", tabUpcoming)
+                Pair("Upcoming", tabUpcoming),
+                Pair("Past", tabPast)
             )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 tabs.forEach { (tabKey, tabLabel) ->
                     FilterTab(
@@ -392,7 +384,6 @@ fun WorkshopListScreen(
                                     if (currentCount < maxSlots) {
                                         val newCount = currentCount + 1
 
-                                        // Hanya data pendaftaran biasa (status REGISTERED), TIADA medan timestamp / checkIn
                                         transaction.set(globalRegistrationDocRef, mapOf(
                                             "workshopId" to workshopId,
                                             "studentId" to currentUserId,
@@ -409,6 +400,17 @@ fun WorkshopListScreen(
                                     }
                                 }.addOnSuccessListener {
                                     val w = selectedWorkshop!!
+
+                                    val notificationData = hashMapOf(
+                                        "title" to "Workshop Registered! 📅",
+                                        "message" to "You have successfully registered for '${w.title}'.",
+                                        "timestamp" to System.currentTimeMillis(),
+                                        "type" to "REGISTRATION",
+                                        "workshopId" to w.id
+                                    )
+                                    firestore.collection("users").document(currentUserId)
+                                        .collection("notifications").add(notificationData)
+
                                     scheduleWorkshopReminders(
                                         context, w.id, w.title, w.date, w.time, currentUserId
                                     )
@@ -517,7 +519,7 @@ fun FilterTab(text: String, isSelected: Boolean, modifier: Modifier = Modifier, 
     Box(
         modifier = modifier
             .height(40.dp)
-            .clip(RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(20.dp))
             .background(if (isSelected) Color(0xFF4A90E2) else if (isDark) Color(0xFF1E1E1E) else Color.White)
             .clickable { onTabClick() },
         contentAlignment = Alignment.Center
@@ -525,8 +527,9 @@ fun FilterTab(text: String, isSelected: Boolean, modifier: Modifier = Modifier, 
         Text(
             text = text,
             color = if (isSelected) Color.White else if (isDark) Color.LightGray else Color.Black,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1
         )
     }
 }

@@ -17,9 +17,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.example.quicktap.auth.RoleSelectScreen
-import com.example.quicktap.auth.staff.*
-import com.example.quicktap.auth.student.*
+import com.example.quicktap.auth.*
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 
@@ -60,7 +58,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun QuickTapAppNavigation() {
     val navController = rememberNavController()
-    val context = androidx.compose.ui.platform.LocalContext.current
 
     var currentUser by remember { mutableStateOf(FirebaseAuth.getInstance().currentUser) }
 
@@ -79,7 +76,6 @@ fun QuickTapAppNavigation() {
 
     var activeWorkshopId by remember { mutableStateOf(defaultWorkshopId) }
 
-    // Ambil ID workshop terkini/aktif dari Firestore jika ada dengan perlindungan ralat
     LaunchedEffect(Unit) {
         try {
             FirebaseFirestore.getInstance().collection("workshops")
@@ -117,7 +113,15 @@ fun QuickTapAppNavigation() {
                 onSignUp = { navController.navigate("student_signup") }
             )
         }
-        composable("student_signup") { StudentSignUpScreen(onNavigateToLogin = { navController.navigate("student_login") }) }
+        composable("student_signup") {
+            StudentSignUpScreen(
+                onNavigateToHome = {
+                    navController.navigate("student_dashboard") {
+                        popUpTo("role_select") { inclusive = true }
+                    }
+                }
+            )
+        }
 
         composable("staff_login") {
             StaffLoginScreen(
@@ -154,7 +158,7 @@ fun QuickTapAppNavigation() {
                 onBackClick = { navController.popBackStack() },
                 onRegisterSuccess = {},
                 onHomeClick = { navController.navigate("student_dashboard") { popUpTo("student_dashboard") { inclusive = true } } },
-                onWorkshopClick = { /* Kekal di skrin senarai bengkel semasa */ },
+                onWorkshopClick = { },
                 onCertificateClick = { navController.navigate("student_certificate/$activeWorkshopId/$currentLoggedInStudentId") },
                 onSettingsClick = { navController.navigate("student_settings") }
             )
@@ -188,14 +192,18 @@ fun QuickTapAppNavigation() {
                 onBackClick = { navController.popBackStack() },
                 onHomeClick = { navController.navigate("student_dashboard") { popUpTo("student_dashboard") { inclusive = true } } },
                 onWorkshopClick = { navController.navigate("workshop_list") },
-                onCertificateClick = { /* Kekal di skrin sijil semasa */ },
+                onCertificateClick = {},
                 onSettingsClick = { navController.navigate("student_settings") }
             )
         }
 
         composable("student_settings") {
             SettingsScreen(
-                onBackClick = { navController.popBackStack() },
+                onBackClick = {
+                    navController.navigate("student_dashboard") {
+                        popUpTo("student_dashboard") { inclusive = true }
+                    }
+                },
                 onAccountClick = { navController.navigate("student_edit_profile") },
                 onLogoutClick = {
                     try {
@@ -256,6 +264,7 @@ fun QuickTapAppNavigation() {
 
         composable("staff_attendance_mode") {
             AttendanceModeScreen(
+                workshopId = activeWorkshopId,
                 onModeSelected = { mode ->
                     navController.navigate("staff_nfc_scan/${Uri.encode(mode)}/$activeWorkshopId")
                 },
@@ -279,7 +288,6 @@ fun QuickTapAppNavigation() {
             )
         }
 
-        // --- LIVE ATTENDANCE ---
         composable(
             route = "staff_analytics/{workshopId}",
             arguments = listOf(navArgument("workshopId") { type = NavType.StringType })
@@ -306,7 +314,6 @@ fun QuickTapAppNavigation() {
             )
         }
 
-        // --- ATTENDANCE REPORT ---
         composable(
             route = "staff_attendance_report/{workshopId}",
             arguments = listOf(navArgument("workshopId") { type = NavType.StringType })
@@ -317,13 +324,12 @@ fun QuickTapAppNavigation() {
                 workshopId = workshopId,
                 onBackClick = { navController.popBackStack() },
                 onHomeClick = { navController.navigate("staff_dashboard") { popUpTo("staff_dashboard") { inclusive = true } } },
-                onReportClick = { /* Kekal di skrin laporan semasa */ },
+                onReportClick = {  },
                 onCertificateClick = { navController.navigate("staff_certificate_management/$workshopId") },
                 onSettingsClick = { navController.navigate("staff_settings") }
             )
         }
 
-        // --- CERTIFICATE MANAGEMENT ---
         composable(
             route = "staff_certificate_management/{workshopId}",
             arguments = listOf(navArgument("workshopId") { type = NavType.StringType })
@@ -336,7 +342,7 @@ fun QuickTapAppNavigation() {
                 onAutoGenerateClick = {},
                 onHomeClick = { navController.navigate("staff_dashboard") { popUpTo("staff_dashboard") { inclusive = true } } },
                 onReportClick = { navController.navigate("staff_attendance_report/$workshopId") },
-                onCertificateClick = { /* Kekal di skrin sijil semasa */ },
+                onCertificateClick = {  },
                 onSettingsClick = { navController.navigate("staff_settings") }
             )
         }

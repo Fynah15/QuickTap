@@ -1,5 +1,7 @@
 package com.example.quicktap
 
+import android.app.Activity
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -18,9 +20,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,11 +35,27 @@ fun SettingsScreen(
     onAccountClick: () -> Unit,
     onLogoutClick: () -> Unit
 ) {
+    val context = LocalContext.current
+    val firestore = FirebaseFirestore.getInstance()
+    val userId = FirebaseAuth.getInstance().currentUser?.uid
+
     // State untuk Dropdown Bahasa
     var langExpanded by remember { mutableStateOf(false) }
 
     // State untuk Dialog Pengesahan Log Keluar
     var showLogoutDialog by remember { mutableStateOf(false) }
+
+    // Fungsi pembantu untuk menyimpan tetapan khusus ke Firestore mengikut User ID
+    fun saveSettingsToFirestore(newDarkMode: Boolean, newLang: String) {
+        if (userId != null) {
+            val userSettings = mapOf(
+                "isDarkMode" to newDarkMode,
+                "language" to newLang
+            )
+            firestore.collection("users").document(userId)
+                .set(userSettings, SetOptions.merge())
+        }
+    }
 
     // 1. Sokongan Bahasa Dinamik
     val currentLang = AppSettingsState.currentLanguage
@@ -127,7 +149,10 @@ fun SettingsScreen(
                     }
                     Switch(
                         checked = AppSettingsState.isDarkMode,
-                        onCheckedChange = { AppSettingsState.isDarkMode = it },
+                        onCheckedChange = { newValue ->
+                            AppSettingsState.isDarkMode = newValue
+                            saveSettingsToFirestore(newValue, AppSettingsState.currentLanguage)
+                        },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color.White,
                             checkedTrackColor = Color(0xFF7ED321)
@@ -182,13 +207,14 @@ fun SettingsScreen(
                     onDismissRequest = { langExpanded = false },
                     modifier = Modifier
                         .fillMaxWidth(0.85f)
-                        .background(cardBackground) // Menukar warna latar belakang kotak dropdown menjadi putih (atau gelap mengikut tema)
+                        .background(cardBackground)
                 ) {
                     DropdownMenuItem(
                         text = { Text("English", color = textColor) },
                         onClick = {
                             AppSettingsState.currentLanguage = "en"
                             langExpanded = false
+                            saveSettingsToFirestore(AppSettingsState.isDarkMode, "en")
                         }
                     )
                     DropdownMenuItem(
@@ -196,6 +222,7 @@ fun SettingsScreen(
                         onClick = {
                             AppSettingsState.currentLanguage = "ms"
                             langExpanded = false
+                            saveSettingsToFirestore(AppSettingsState.isDarkMode, "ms")
                         }
                     )
                 }

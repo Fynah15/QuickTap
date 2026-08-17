@@ -1,4 +1,4 @@
-package com.example.quicktap.auth.staff
+package com.example.quicktap.auth
 
 import android.widget.Toast
 import androidx.compose.foundation.Image
@@ -41,7 +41,6 @@ fun StaffLoginScreen(
     var isPasswordVisible by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
 
-    // State untuk mengawal fungsi skrol menegak
     val scrollState = rememberScrollState()
 
     Box(
@@ -54,12 +53,10 @@ fun StaffLoginScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.Center)
-                // Menambah kebolehan skrol menegak serta memastikan ruang selamat dari papan kekunci
                 .verticalScroll(scrollState)
                 .imePadding(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // --- LOGO QUICKTAP ---
             Image(
                 painter = painterResource(id = R.drawable.quicktap_logo),
                 contentDescription = "QuickTap Logo",

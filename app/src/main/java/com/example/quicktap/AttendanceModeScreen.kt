@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -197,5 +198,65 @@ fun setLiveAttendanceStatusInFirebase(context: android.content.Context, workshop
         }
         .addOnFailureListener { e ->
             Toast.makeText(context, "Failed to update Firebase: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+}
+
+/**
+ * Fungsi Pintar untuk Merekod Kehadiran Menggunakan Kad NFC (Card UID)
+ * Dipanggil apabila peranti staf membaca UID kad fizikal pelajar.
+ */
+fun processNfcCardTap(context: android.content.Context, workshopId: String, scannedCardUid: String) {
+    val firestore = FirebaseFirestore.getInstance()
+
+    // 1. Cari pemilik kad di koleksi 'users' berdasarkan cardUid yang didaftarkan dalam Edit Profile
+    firestore.collection("users")
+        .whereEqualTo("cardUid", scannedCardUid)
+        .get()
+        .addOnSuccessListener { userQuerySnapshot ->
+            if (!userQuerySnapshot.isEmpty) {
+                val userDoc = userQuerySnapshot.documents[0]
+                val realStudentId = userDoc.id
+                val realStudentName = userDoc.getString("name") ?: userDoc.getString("fullName") ?: "Student"
+                val studentNumber = userDoc.getString("studentId") ?: userDoc.getString("studentNumber") ?: "-"
+
+                val registrationDocId = "${workshopId}_$realStudentId"
+                val registrationRef = firestore.collection("registrations").document(registrationDocId)
+
+                // 2. Semak mod semasa bengkel (Check-In atau Check-Out)
+                firestore.collection("workshops").document(workshopId).get()
+                    .addOnSuccessListener { workshopDoc ->
+                        val attendanceMode = workshopDoc.getString("attendanceMode") ?: "Check-In"
+
+                        // 3. Kemas kini atau Cipta rekod kehadiran dengan Nama Sebenar Pelajar
+                        val updateData = mutableMapOf<String, Any>(
+                            "workshopId" to workshopId,
+                            "studentId" to realStudentId,
+                            "studentName" to realStudentName, // <--- Nama Sebenar Pelajar Masuk Sini!
+                            "studentNumber" to studentNumber,
+                            "status" to "PRESENT"
+                        )
+
+                        if (attendanceMode == "Check-Out") {
+                            updateData["checkOutTimestamp"] = FieldValue.serverTimestamp()
+                            updateData["timeout"] = FieldValue.serverTimestamp()
+                        } else {
+                            updateData["timestamp"] = FieldValue.serverTimestamp()
+                            updateData["checkInTimestamp"] = FieldValue.serverTimestamp()
+                        }
+
+                        registrationRef.set(updateData, com.google.firebase.firestore.SetOptions.merge())
+                            .addOnSuccessListener {
+                                Toast.makeText(context, "$attendanceMode Success: $realStudentName", Toast.LENGTH_LONG).show()
+                            }
+                            .addOnFailureListener { e ->
+                                Toast.makeText(context, "Failed to record: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                    }
+            } else {
+                Toast.makeText(context, "Kad NFC tidak berdaftar! Sila daftar kad di Edit Profile.", Toast.LENGTH_LONG).show()
+            }
+        }
+        .addOnFailureListener { e ->
+            Toast.makeText(context, "Ralat pangkalan data: ${e.message}", Toast.LENGTH_SHORT).show()
         }
 }

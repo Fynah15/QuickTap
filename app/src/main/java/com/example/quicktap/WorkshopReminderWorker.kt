@@ -7,10 +7,10 @@ import com.example.quicktap.service.LocalNotificationService
 
 class WorkshopReminderWorker(context: Context, workerParams: WorkerParameters) : Worker(context, workerParams) {
     override fun doWork(): Result {
-        val title = inputData.getString("title") ?: "Peringatan Bengkel"
-        val message = inputData.getString("message") ?: "Bengkel anda akan bermula tidak lama lagi."
+        val title = inputData.getString("title") ?: "Workshop Reminder"
+        val message = inputData.getString("message") ?: "Your workshop will start soon."
 
-        // Panggil LocalNotificationService untuk memaparkan notifikasi pada skrin
+        // Call LocalNotificationService to display notification on the screen
         LocalNotificationService.showLocalNotification(applicationContext, title, message)
 
         return Result.success()

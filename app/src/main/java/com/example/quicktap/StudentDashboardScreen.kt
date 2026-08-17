@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -51,14 +52,12 @@ fun StudentDashboardScreen(
     val currentUser = auth.currentUser
     val context = LocalContext.current
 
-    // State untuk maklumat profil pelajar daripada Firestore
-    var fullName by remember { mutableStateOf("Nursyafinah Binti Hamdan") }
-    var nickname by remember { mutableStateOf("Nursyafinah") }
-    var studentIdNumber by remember { mutableStateOf("202209020204") }
-    var courseName by remember { mutableStateOf("Bachelor of Information Technology") }
+    var fullName by remember { mutableStateOf("Loading...") }
+    var nickname by remember { mutableStateOf("Student") }
+    var studentIdNumber by remember { mutableStateOf("") }
+    var courseName by remember { mutableStateOf("") }
     var profileImageUrl by remember { mutableStateOf("") }
 
-    // State untuk Acara Akan Datang (Highlight)
     var upcomingEventTitle by remember { mutableStateOf("") }
     var upcomingEventDesc by remember { mutableStateOf("") }
     var upcomingEventDate by remember { mutableStateOf("") }
@@ -66,20 +65,45 @@ fun StudentDashboardScreen(
     var upcomingEventLocation by remember { mutableStateOf("") }
     var hasUpcomingEvent by remember { mutableStateOf(false) }
 
-    // State untuk Dialog Notifikasi
     var showNotificationDialog by remember { mutableStateOf(false) }
 
-    // Menggunakan rememberSaveable agar state kehadiran kekal semasa navigasi
     var showAttendanceAlert by rememberSaveable { mutableStateOf(false) }
     var attendanceModeDetected by rememberSaveable { mutableStateOf("Check - In") }
     var lastProcessedDocId by rememberSaveable { mutableStateOf("") }
 
-    // Permintaan kebenaran notifikasi untuk Android 13+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { _ -> }
 
-    // Ambil data profil & peringatan bengkel
+    fun bindUserData(document: com.google.firebase.firestore.DocumentSnapshot) {
+        val fetchedFullName = document.getString("fullName") ?: document.getString("name") ?: ""
+        val fetchedNick = document.getString("nickname") ?: ""
+        val fetchedStudentId = document.getString("studentId") ?: ""
+        val fetchedCourse = document.getString("course") ?: document.getString("program") ?: ""
+
+        if (fetchedFullName.isNotEmpty()) {
+            fullName = fetchedFullName
+        }
+
+        if (fetchedNick.isNotEmpty()) {
+            nickname = fetchedNick
+        } else if (fetchedFullName.isNotEmpty()) {
+            nickname = fetchedFullName.substringBefore(" ")
+        } else {
+            nickname = currentUser?.email?.substringBefore("@") ?: "Student"
+        }
+
+        if (fetchedStudentId.isNotEmpty()) {
+            studentIdNumber = fetchedStudentId
+        }
+
+        if (fetchedCourse.isNotEmpty()) {
+            courseName = fetchedCourse
+        }
+
+        profileImageUrl = document.getString("profileImageUrl") ?: ""
+    }
+
     LaunchedEffect(currentUser) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             try {
@@ -90,35 +114,47 @@ fun StudentDashboardScreen(
         }
 
         val uid = currentUser?.uid
+        val userEmail = currentUser?.email
+
         if (uid != null) {
-            // Panggil pengurus peringatan bengkel secara automatik selepas login/uid sedia
             try {
                 WorkshopReminderManager.checkAndTriggerReminders(context, uid)
             } catch (e: Exception) {
                 e.printStackTrace()
             }
 
-            try {
-                firestore.collection("users").document(uid).get()
-                    .addOnSuccessListener { document ->
-                        if (document != null && document.exists()) {
-                            fullName = document.getString("name") ?: "Nursyafinah Binti Hamdan"
-                            nickname = document.getString("nickname") ?: fullName.substringBefore(" ")
-                            studentIdNumber = document.getString("studentId") ?: "202209020204"
-                            courseName = document.getString("course") ?: (document.getString("program") ?: "Bachelor of Information Technology")
-                            profileImageUrl = document.getString("profileImageUrl") ?: ""
+            firestore.collection("users").document(uid).get()
+                .addOnSuccessListener { document ->
+                    if (document != null && document.exists()) {
+                        bindUserData(document)
+                    } else {
+                        if (userEmail != null) {
+                            firestore.collection("users")
+                                .whereEqualTo("email", userEmail)
+                                .get()
+                                .addOnSuccessListener { querySnapshot ->
+                                    if (!querySnapshot.isEmpty) {
+                                        bindUserData(querySnapshot.documents[0])
+                                    } else {
+                                        fullName = "Dokumen Firestore tiada!"
+                                    }
+                                }
+                                .addOnFailureListener { e ->
+                                    fullName = "Error Query: ${e.message}"
+                                }
+                        } else {
+                            fullName = "Dokumen Firestore tiada!"
                         }
                     }
-                    .addOnFailureListener {
-                        nickname = currentUser.email?.substringBefore("@") ?: "Student"
-                    }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+                }
+                .addOnFailureListener { e ->
+                    fullName = "Error Get: ${e.message}"
+                }
+        } else {
+            fullName = "Error: User tak login (Null)"
         }
     }
 
-    // Mendengar perubahan acara akan datang secara real-time dengan pelepasan sumber yang betul
     DisposableEffect(Unit) {
         val listenerRegistration = firestore.collection("workshops").addSnapshotListener { snapshot, error ->
             if (error == null && snapshot != null) {
@@ -133,7 +169,6 @@ fun StudentDashboardScreen(
                 var nearestDate: Date? = null
 
                 for (doc in snapshot.documents) {
-                    // Safely handle date as either Timestamp or String
                     val parsedDate: Date? = when (val dateObj = doc.get("date") ?: doc.get("workshopDate")) {
                         is com.google.firebase.Timestamp -> dateObj.toDate()
                         is String -> {
@@ -162,11 +197,10 @@ fun StudentDashboardScreen(
                 if (nearestEvent != null) {
                     upcomingEventTitle = nearestEvent.getString("title") ?: "Upcoming Event"
                     upcomingEventDesc = nearestEvent.getString("description") ?: ""
-                    
-                    // Format the date consistently for display
+
                     val dateObj = nearestEvent.get("date") ?: nearestEvent.get("workshopDate")
                     upcomingEventDate = if (dateObj is com.google.firebase.Timestamp) {
-                        SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(dateObj.toDate())
+                        SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(dateObj.toDate())
                     } else {
                         dateObj.toString()
                     }
@@ -187,6 +221,7 @@ fun StudentDashboardScreen(
 
     val currentLang = AppSettingsState.currentLanguage
     val welcomeText = if (currentLang == "ms") "Selamat Datang, $nickname!" else "Welcome, $nickname!"
+
     val homeNav = if (currentLang == "ms") "Utama" else "Home"
     val workshopNav = if (currentLang == "ms") "Bengkel" else "Workshop"
     val certNav = if (currentLang == "ms") "Sijil" else "Certificate"
@@ -414,10 +449,30 @@ fun StudentDashboardScreen(
                         }
 
                         Spacer(modifier = Modifier.width(16.dp))
-                        Column {
-                            Text(fullName, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = textColor)
-                            Text(studentIdNumber, color = secondaryTextColor, fontSize = 14.sp)
-                            Text(courseName, color = secondaryTextColor, fontSize = 12.sp)
+
+                        Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                            Text(
+                                text = fullName,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = textColor,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = studentIdNumber,
+                                color = secondaryTextColor,
+                                fontSize = 14.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = courseName,
+                                color = secondaryTextColor,
+                                fontSize = 13.sp,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                     Box(

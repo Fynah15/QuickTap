@@ -17,8 +17,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.quicktap.AppSettingsState
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 
 data class WorkshopHistoryItem(
     val workshopId: String,
@@ -39,6 +40,7 @@ fun StudentHistoryScreen(
     val firestore = FirebaseFirestore.getInstance()
     var historyList = remember { mutableStateListOf<WorkshopHistoryItem>() }
     var isLoading by remember { mutableStateOf(true) }
+    val coroutineScope = rememberCoroutineScope()
 
     // 1. Sokongan Bahasa Dinamik
     val currentLang = AppSettingsState.currentLanguage
@@ -59,81 +61,80 @@ fun StudentHistoryScreen(
     val textColor = if (isDark) Color.White else Color.Black
     val secondaryTextColor = if (isDark) Color.LightGray else Color.Gray
 
-    // Ambil data sejarah pendaftaran & kehadiran pelajar dari Firestore
-    LaunchedEffect(studentId) {
+    // Real-time snapshot listener dengan DisposableEffect yang sah pada skop Composable
+    DisposableEffect(studentId) {
         val TAG = "HistoryDebug"
-        Log.d(TAG, "Mula mencari history untuk studentId: $studentId")
+        if (studentId.isEmpty()) {
+            isLoading = false
+            return@DisposableEffect onDispose {}
+        }
 
-        firestore.collection("registrations")
+        Log.d(TAG, "Memulakan real-time listener untuk studentId: $studentId")
+
+        val listenerRegistration = firestore.collection("registrations")
             .whereEqualTo("studentId", studentId)
-            .get()
-            .addOnSuccessListener { regSnapshot ->
-                val tempList = mutableListOf<WorkshopHistoryItem>()
-                val workshopsProcessed = regSnapshot.documents.size
-
-                if (workshopsProcessed == 0) {
+            .addSnapshotListener { regSnapshot, error ->
+                if (error != null) {
+                    Log.e(TAG, "Ralat mendengar perubahan pendaftaran", error)
                     isLoading = false
-                    return@addOnSuccessListener
+                    return@addSnapshotListener
                 }
 
-                regSnapshot.documents.forEach { regDoc ->
-                    val workshopId = regDoc.getString("workshopId") ?: ""
+                if (regSnapshot == null || regSnapshot.isEmpty) {
+                    historyList.clear()
+                    isLoading = false
+                    return@addSnapshotListener
+                }
 
-                    val checkIn = regDoc.get("checkInTimestamp")
-                        ?: regDoc.get("checkInTime")
-                        ?: regDoc.get("timestamp")
+                // Lancarkan coroutine yang selamat menggunakan remembered scope
+                coroutineScope.launch {
+                    val tempList = mutableListOf<WorkshopHistoryItem>()
 
-                    val checkOut = regDoc.get("checkOutTimestamp")
-                        ?: regDoc.get("checkOutTime")
+                    for (regDoc in regSnapshot.documents) {
+                        val workshopId = regDoc.getString("workshopId") ?: ""
+                        val hasCheckedIn = AttendanceUtils.hasNfcCheckIn(regDoc)
+                        val hasCheckedOut = AttendanceUtils.hasNfcCheckOut(regDoc)
+                        val isEligible = AttendanceUtils.isEligibleForCertificate(regDoc)
 
-                    val hasCheckedIn = checkIn != null
-                    val hasCheckedOut = checkOut != null
-                    val isSent = regDoc.getString("certificateStatus") == "Sent"
+                        var workshopTitle = "Workshop"
+                        var workshopDate = "Recent"
 
-                    // Syarat kelayakan sijil: Pelajar wajib lengkap check-in DAN check-out ATAU status sudah dihantar
-                    val isEligible = (hasCheckedIn && hasCheckedOut) || isSent
-
-                    if (workshopId.isNotEmpty()) {
-                        firestore.collection("workshops").document(workshopId).get()
-                            .addOnSuccessListener { workshopDoc ->
-                                val title = workshopDoc.getString("title") ?: workshopDoc.getString("name") ?: "Workshop"
-                                val date = workshopDoc.getString("date") ?: "Recent"
-
-                                val checkInStr = if (hasCheckedIn) checkedInText else pendingText
-                                val checkOutStr = if (hasCheckedOut) checkedOutText else pendingText
-
-                                tempList.add(
-                                    WorkshopHistoryItem(
-                                        workshopId = workshopId,
-                                        workshopTitle = title,
-                                        date = date,
-                                        checkInStatus = checkInStr,
-                                        checkOutStatus = checkOutStr,
-                                        isEligibleForCert = isEligible
-                                    )
-                                )
-
-                                if (tempList.size == workshopsProcessed) {
-                                    historyList.clear()
-                                    historyList.addAll(tempList)
-                                    isLoading = false
+                        if (workshopId.isNotEmpty()) {
+                            try {
+                                val workshopDoc = firestore.collection("workshops").document(workshopId).get().await()
+                                if (workshopDoc.exists()) {
+                                    workshopTitle = workshopDoc.getString("title") ?: workshopDoc.getString("name") ?: "Workshop"
+                                    workshopDate = workshopDoc.getString("date") ?: "Recent"
                                 }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Gagal ambil info workshop: $workshopId", e)
                             }
-                            .addOnFailureListener {
-                                if (tempList.size == workshopsProcessed) {
-                                    isLoading = false
-                                }
-                            }
-                    } else {
-                        if (tempList.size == workshopsProcessed) {
-                            isLoading = false
                         }
+
+                        val checkInStr = if (hasCheckedIn) checkedInText else pendingText
+                        val checkOutStr = if (hasCheckedOut) checkedOutText else pendingText
+
+                        tempList.add(
+                            WorkshopHistoryItem(
+                                workshopId = workshopId,
+                                workshopTitle = workshopTitle,
+                                date = workshopDate,
+                                checkInStatus = checkInStr,
+                                checkOutStatus = checkOutStr,
+                                isEligibleForCert = isEligible
+                            )
+                        )
                     }
+
+                    historyList.clear()
+                    historyList.addAll(tempList)
+                    isLoading = false
                 }
             }
-            .addOnFailureListener {
-                isLoading = false
-            }
+
+        onDispose {
+            listenerRegistration.remove()
+        }
     }
 
     Scaffold(
@@ -174,7 +175,7 @@ fun StudentHistoryScreen(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(historyList) { item ->
+                        items(historyList, key = { it.workshopId }) { item ->
                             Card(
                                 colors = CardDefaults.cardColors(containerColor = cardBgColor),
                                 shape = RoundedCornerShape(8.dp),

@@ -25,7 +25,7 @@ fun generateSimpleCertificate(
     val subtitleText = if (currentLang == "ms") "Sijil ini dengan bangganya dianugerahkan kepada" else "This certificate is proudly presented to"
     val reasonText = if (currentLang == "ms") "kerana telah berjaya menyertai program / bengkel:" else "for successfully participating in the programme / workshop:"
 
-    val dateLabel = if (currentLang == "ms") "Tarikh: $workshopDate" else "Date: $workshopDate"
+    val dateLabel = if (currentLang == "ms") "Tarikh: $workshopDate | Masa: $workshopTime" else "Date: $workshopDate | Time: $workshopTime"
     val studentIdLabel = if (currentLang == "ms") "No. ID: $studentId" else "Student ID: $studentId"
     val organizerLabel = organizerName.ifBlank { if (currentLang == "ms") "Penganjur Rasmi" else "Official Organizer" }
 

@@ -9,7 +9,6 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.WorkspacePremium
@@ -28,9 +27,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.quicktap.AppSettingsState
-import com.example.quicktap.R
-import com.example.quicktap.generateSimpleCertificate
 import com.google.firebase.firestore.FirebaseFirestore
 import java.io.File
 import java.io.FileOutputStream
@@ -61,8 +57,6 @@ fun CertificateScreen(
     var isLoading by remember { mutableStateOf(true) }
 
     val currentLang = AppSettingsState.currentLanguage
-    val titleText = if (currentLang == "ms") "Sijil" else "Certificate"
-
     val certTitleText = if (currentLang == "ms") "SIJIL PENYERTAAN" else "CERTIFICATE OF PARTICIPATION"
     val certSubtitleText = if (currentLang == "ms") "Sijil ini dengan bangganya dianugerahkan kepada" else "This certificate is proudly presented to"
     val certReasonText = if (currentLang == "ms") "kerana telah berjaya menyertai program / bengkel:" else "for successfully participating in the programme / workshop:"
@@ -154,17 +148,6 @@ fun CertificateScreen(
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(titleText, color = Color.White, fontSize = 16.sp) },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF912323))
-            )
-        },
         bottomBar = {
             NavigationBar(
                 containerColor = Color(0xFF912323),
@@ -224,10 +207,11 @@ fun CertificateScreen(
                 .background(backgroundColor)
                 .padding(paddingValues)
                 .verticalScroll(rememberScrollState())
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center // Mengatur kandungan supaya berada di tengah skrin
         ) {
-            // --- KAD PREBIU SIJIL DENGAN TEKS DINAMIK LENGKAP ---
+            // --- KAD PREBIU SIJIL ---
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -237,7 +221,6 @@ fun CertificateScreen(
                     .clip(RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                // Imej Latar Belakang Sijil (Kosong)
                 Image(
                     painter = painterResource(id = R.drawable.certificate_design),
                     contentDescription = "Certificate",
@@ -245,21 +228,20 @@ fun CertificateScreen(
                     contentScale = ContentScale.Fit
                 )
 
-                // Kandungan Teks Prebiu di atas Imej Kosong
                 if (!isLoading) {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 24.dp, vertical = 16.dp),
+                            .padding(horizontal = 24.dp, vertical = 12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.SpaceEvenly
+                        verticalArrangement = Arrangement.Center
                     ) {
-                        // Tajuk & Sub-Tajuk Sijil
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 text = certTitleText,
                                 color = Color(0xFF1A1A1A),
                                 fontSize = 11.sp,
+                                lineHeight = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 textAlign = TextAlign.Center
                             )
@@ -268,35 +250,41 @@ fun CertificateScreen(
                                 text = certSubtitleText,
                                 color = Color.DarkGray,
                                 fontSize = 7.sp,
+                                lineHeight = 7.sp,
                                 fontStyle = FontStyle.Italic,
                                 textAlign = TextAlign.Center
                             )
                         }
 
-                        // Nama & ID Pelajar
+                        Spacer(modifier = Modifier.height(10.dp))
+
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 text = studentName,
                                 color = Color.Black,
                                 fontSize = 13.sp,
+                                lineHeight = 13.sp,
                                 fontWeight = FontWeight.Bold,
                                 textAlign = TextAlign.Center
                             )
-                            Spacer(modifier = Modifier.height(1.dp))
+                            Spacer(modifier = Modifier.height(6.dp))
                             Text(
                                 text = if (currentLang == "ms") "No. ID: $matrixNumber" else "Student ID: $matrixNumber",
                                 color = Color.Gray,
                                 fontSize = 7.sp,
+                                lineHeight = 7.sp,
                                 textAlign = TextAlign.Center
                             )
                         }
 
-                        // Keterangan & Nama Bengkel
+                        Spacer(modifier = Modifier.height(10.dp))
+
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 text = certReasonText,
                                 color = Color.DarkGray,
                                 fontSize = 7.sp,
+                                lineHeight = 7.sp,
                                 fontStyle = FontStyle.Italic,
                                 textAlign = TextAlign.Center
                             )
@@ -305,6 +293,7 @@ fun CertificateScreen(
                                 text = workshopName,
                                 color = Color(0xFF912323),
                                 fontSize = 10.sp,
+                                lineHeight = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 textAlign = TextAlign.Center,
                                 maxLines = 2
@@ -314,7 +303,7 @@ fun CertificateScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(30.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // --- BUTANG MUAT TURUN ---
             Button(
@@ -357,19 +346,17 @@ fun CertificateScreen(
                     .fillMaxWidth()
                     .height(50.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF4A90E2),
+                    containerColor = if (isEligible) Color(0xFF4A90E2) else Color.LightGray,
                     disabledContainerColor = if (isDark) Color(0xFF2C2C2C) else Color.LightGray
                 ),
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Text(
                     text = if (isLoading) checkingStatusText else if (isEligible) downloadCertText else notEligibleText,
-                    color = Color.White,
+                    color = if (isEligible) Color.White else Color.DarkGray,
                     fontWeight = FontWeight.Bold
                 )
             }
-
-            Spacer(modifier = Modifier.height(30.dp))
         }
     }
 }

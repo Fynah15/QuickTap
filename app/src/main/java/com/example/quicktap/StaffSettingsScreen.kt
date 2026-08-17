@@ -19,6 +19,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -26,9 +29,24 @@ fun StaffSettingsScreen(
     onBackClick: () -> Unit,
     onLogoutClick: () -> Unit
 ) {
+    val firestore = FirebaseFirestore.getInstance()
+    val userId = FirebaseAuth.getInstance().currentUser?.uid
+
     // State management tempatan untuk menu dropdown bahasa & dialog pengesahan logout
     var isLanguageMenuExpanded by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
+
+    // Fungsi pembantu untuk menyimpan tetapan ke Firestore berdasarkan ID pengguna
+    fun saveSettingsToFirestore(newDarkMode: Boolean, newLang: String) {
+        if (userId != null) {
+            val userSettings = mapOf(
+                "isDarkMode" to newDarkMode,
+                "language" to newLang
+            )
+            firestore.collection("users").document(userId)
+                .set(userSettings, SetOptions.merge())
+        }
+    }
 
     // 1. Sokongan Bahasa Dinamik
     val currentLang = AppSettingsState.currentLanguage
@@ -85,7 +103,10 @@ fun StaffSettingsScreen(
                 ) {
                     Switch(
                         checked = AppSettingsState.isDarkMode,
-                        onCheckedChange = { AppSettingsState.isDarkMode = it },
+                        onCheckedChange = { newValue ->
+                            AppSettingsState.isDarkMode = newValue
+                            saveSettingsToFirestore(newValue, AppSettingsState.currentLanguage)
+                        },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color.White,
                             checkedTrackColor = Color(0xFF7ED321)
@@ -119,6 +140,7 @@ fun StaffSettingsScreen(
                             onClick = {
                                 AppSettingsState.currentLanguage = "en"
                                 isLanguageMenuExpanded = false
+                                saveSettingsToFirestore(AppSettingsState.isDarkMode, "en")
                             }
                         )
                         DropdownMenuItem(
@@ -126,6 +148,7 @@ fun StaffSettingsScreen(
                             onClick = {
                                 AppSettingsState.currentLanguage = "ms"
                                 isLanguageMenuExpanded = false
+                                saveSettingsToFirestore(AppSettingsState.isDarkMode, "ms")
                             }
                         )
                     }
@@ -155,7 +178,6 @@ fun StaffSettingsScreen(
                     val interactionSource = remember { MutableInteractionSource() }
                     val isPressed by interactionSource.collectIsPressedAsState()
 
-                    // Warna bertukar jadi Biru apabila ditekan, jika tidak warna kelabu neutral
                     val buttonColor = if (isPressed) Color(0xFF4A90E2) else Color(0xFFE0E0E0)
                     val textButtonColor = if (isPressed) Color.White else Color.Black
 
@@ -174,7 +196,6 @@ fun StaffSettingsScreen(
                     val interactionSource = remember { MutableInteractionSource() }
                     val isPressed by interactionSource.collectIsPressedAsState()
 
-                    // Warna bertukar jadi Biru apabila ditekan, jika tidak warna kelabu neutral
                     val buttonColor = if (isPressed) Color(0xFF4A90E2) else Color(0xFFE0E0E0)
                     val textButtonColor = if (isPressed) Color.White else Color.Black
 

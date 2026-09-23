@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -27,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -48,6 +50,7 @@ fun EditProfileScreen(onBackClick: () -> Unit) {
     var fullName by remember { mutableStateOf("") }
     var studentId by remember { mutableStateOf("") }
     var program by remember { mutableStateOf("Bachelor of Information Technology") }
+    var phoneNumber by remember { mutableStateOf("") } // <-- Pembolehubah untuk nombor telefon
     var cardUid by remember { mutableStateOf("") }
     var profileImageUrl by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
@@ -75,6 +78,7 @@ fun EditProfileScreen(onBackClick: () -> Unit) {
                         studentId = document.getString("studentId") ?: document.getString("studentNumber") ?: ""
                         email = document.getString("email") ?: (currentUser.email ?: "")
                         program = document.getString("course") ?: document.getString("program") ?: "Bachelor of Information Technology"
+                        phoneNumber = document.getString("phone") ?: document.getString("phoneNumber") ?: "" // <-- Ambil data telefon
                         // Support both cardUid and nfcUid fields from database
                         cardUid = document.getString("cardUid") ?: document.getString("nfcUid") ?: ""
                         profileImageUrl = document.getString("profileImageUrl") ?: ""
@@ -122,6 +126,7 @@ fun EditProfileScreen(onBackClick: () -> Unit) {
     val studentIdLabelText = if (currentLang == "ms") "ID PELAJAR" else "STUDENT ID"
 
     val emailLabel = if (currentLang == "ms") "Email" else "Email"
+    val phoneLabel = if (currentLang == "ms") "Nombor Telefon" else "Phone Number"
     val cardUidLabel = if (currentLang == "ms") "Status Kad NFC Fizikal" else "Physical NFC Card Status"
     val saveProfileText = if (currentLang == "ms") "Simpan Profil" else "Save Profile"
 
@@ -275,6 +280,24 @@ fun EditProfileScreen(onBackClick: () -> Unit) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // Phone Number Field (Baru)
+            Text(phoneLabel, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = textColor)
+            Spacer(modifier = Modifier.height(4.dp))
+            OutlinedTextField(
+                value = phoneNumber, onValueChange = { phoneNumber = it },
+                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = textColor),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color(0xFF4A90E2),
+                    unfocusedBorderColor = secondaryTextColor,
+                    focusedTextColor = textColor,
+                    unfocusedTextColor = textColor
+                )
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             // Physical NFC Card Status
             Text(cardUidLabel, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = textColor)
             Spacer(modifier = Modifier.height(4.dp))
@@ -376,6 +399,8 @@ fun EditProfileScreen(onBackClick: () -> Unit) {
                     val updateFirestoreData: (String?) -> Unit = { imageUrl ->
                         val updatedData = mutableMapOf<String, Any>(
                             "email" to email,
+                            "phone" to phoneNumber, // <-- Simpan nombor telefon terkini
+                            "phoneNumber" to phoneNumber,
                             "course" to program,
                             "program" to program
                         )

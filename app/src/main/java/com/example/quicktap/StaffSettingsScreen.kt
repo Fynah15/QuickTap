@@ -21,7 +21,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.SetOptions
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,24 +28,13 @@ fun StaffSettingsScreen(
     onBackClick: () -> Unit,
     onLogoutClick: () -> Unit
 ) {
-    val firestore = FirebaseFirestore.getInstance()
-    val userId = FirebaseAuth.getInstance().currentUser?.uid
+    val firestore = remember { FirebaseFirestore.getInstance() }
+    val currentUser = FirebaseAuth.getInstance().currentUser
+    val userId = currentUser?.uid ?: ""
 
     // State management tempatan untuk menu dropdown bahasa & dialog pengesahan logout
     var isLanguageMenuExpanded by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
-
-    // Fungsi pembantu untuk menyimpan tetapan ke Firestore berdasarkan ID pengguna
-    fun saveSettingsToFirestore(newDarkMode: Boolean, newLang: String) {
-        if (userId != null) {
-            val userSettings = mapOf(
-                "isDarkMode" to newDarkMode,
-                "language" to newLang
-            )
-            firestore.collection("users").document(userId)
-                .set(userSettings, SetOptions.merge())
-        }
-    }
 
     // 1. Sokongan Bahasa Dinamik
     val currentLang = AppSettingsState.currentLanguage
@@ -104,8 +92,13 @@ fun StaffSettingsScreen(
                     Switch(
                         checked = AppSettingsState.isDarkMode,
                         onCheckedChange = { newValue ->
-                            AppSettingsState.isDarkMode = newValue
-                            saveSettingsToFirestore(newValue, AppSettingsState.currentLanguage)
+                            // Kemas kini state global & simpan terus ke Firestore untuk akaun ini
+                            AppSettingsState.updateUserSettings(
+                                firestore = firestore,
+                                uid = userId,
+                                darkMode = newValue,
+                                lang = AppSettingsState.currentLanguage
+                            )
                         },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color.White,
@@ -138,17 +131,25 @@ fun StaffSettingsScreen(
                         DropdownMenuItem(
                             text = { Text("English", color = textColor) },
                             onClick = {
-                                AppSettingsState.currentLanguage = "en"
                                 isLanguageMenuExpanded = false
-                                saveSettingsToFirestore(AppSettingsState.isDarkMode, "en")
+                                AppSettingsState.updateUserSettings(
+                                    firestore = firestore,
+                                    uid = userId,
+                                    darkMode = AppSettingsState.isDarkMode,
+                                    lang = "en"
+                                )
                             }
                         )
                         DropdownMenuItem(
                             text = { Text("Malay", color = textColor) },
                             onClick = {
-                                AppSettingsState.currentLanguage = "ms"
                                 isLanguageMenuExpanded = false
-                                saveSettingsToFirestore(AppSettingsState.isDarkMode, "ms")
+                                AppSettingsState.updateUserSettings(
+                                    firestore = firestore,
+                                    uid = userId,
+                                    darkMode = AppSettingsState.isDarkMode,
+                                    lang = "ms"
+                                )
                             }
                         )
                     }
@@ -184,6 +185,8 @@ fun StaffSettingsScreen(
                     Button(
                         onClick = {
                             showLogoutDialog = false
+                            // DIBETULKAN: Buang FirebaseAuth.getInstance().signOut() di sini
+                            // kerana ia sudah diuruskan dengan selamat di dalam MainActivity.
                             onLogoutClick()
                         },
                         interactionSource = interactionSource,

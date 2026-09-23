@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.*
 import android.graphics.pdf.PdfDocument
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import java.io.File
 import java.io.FileOutputStream
 
@@ -15,141 +16,111 @@ fun generateSimpleCertificate(
     workshopDate: String = "2026",
     workshopTime: String = "10:00 AM",
     organizerName: String = "QuickTap Organizer",
+    currentLang: String = "ms",
     outputPath: File
 ) {
     val document = PdfDocument()
 
-    // Sokongan Bahasa Dinamik
-    val currentLang = AppSettingsState.currentLanguage
-    val titleText = if (currentLang == "ms") "SIJIL PENYERTAAN" else "CERTIFICATE OF PARTICIPATION"
-    val subtitleText = if (currentLang == "ms") "Sijil ini dengan bangganya dianugerahkan kepada" else "This certificate is proudly presented to"
-    val reasonText = if (currentLang == "ms") "kerana telah berjaya menyertai program / bengkel:" else "for successfully participating in the programme / workshop:"
-
-    val dateLabel = if (currentLang == "ms") "Tarikh: $workshopDate | Masa: $workshopTime" else "Date: $workshopDate | Time: $workshopTime"
-    val studentIdLabel = if (currentLang == "ms") "No. ID: $studentId" else "Student ID: $studentId"
-    val organizerLabel = organizerName.ifBlank { if (currentLang == "ms") "Penganjur Rasmi" else "Official Organizer" }
-
-    // Resolusi Standard Sijil Melintang (Landscape A4)
+    // Standard A4 Landscape print resolution
     val pageWidth = 3508
     val pageHeight = 2480
+    val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 1).create()
+    val page = document.startPage(pageInfo)
+    val canvas = page.canvas
 
+    // 1. Draw Background Template 100% matching UI
     val drawable = ContextCompat.getDrawable(context, R.drawable.certificate_design)
-    val bitmap = Bitmap.createBitmap(pageWidth, pageHeight, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bitmap)
-
-    drawable?.setBounds(0, 0, pageWidth, pageHeight)
-    drawable?.draw(canvas)
-
-    val paint = Paint().apply {
-        color = Color.BLACK
-        textAlign = Paint.Align.CENTER
-        isAntiAlias = true
+    if (drawable != null) {
+        val bitmap = Bitmap.createBitmap(pageWidth, pageHeight, Bitmap.Config.ARGB_8888)
+        val tempCanvas = Canvas(bitmap)
+        drawable.setBounds(0, 0, pageWidth, pageHeight)
+        drawable.draw(tempCanvas)
+        canvas.drawBitmap(bitmap, 0f, 0f, null)
     }
 
-    val centerX = (pageWidth / 2).toFloat()
+    // 2. Setup Paint & Center Alignment (Seiras dengan paparan skrin UI)
+    val centerX = (pageWidth / 2f)
     val maxTextWidth = 2600f
+    val paint = Paint().apply {
+        isAntiAlias = true
+        textAlign = Paint.Align.CENTER
+    }
 
-    // 1. Tajuk Utama: CERTIFICATE OF PARTICIPATION
+    // Certificate Title
     paint.textSize = 95f
     paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     paint.color = Color.parseColor("#1A1A1A")
-    canvas.drawText(titleText, centerX, 700f, paint)
+    canvas.drawText(if (currentLang == "ms") "SIJIL PENYERTAAN" else "CERTIFICATE OF PARTICIPATION", centerX, 900f, paint)
 
-    // 2. Sub-Tajuk: "This certificate is proudly presented to"
+    // Subtitle
     paint.textSize = 50f
     paint.typeface = Typeface.create(Typeface.SERIF, Typeface.ITALIC)
     paint.color = Color.DKGRAY
-    canvas.drawText(subtitleText, centerX, 850f, paint)
+    canvas.drawText(if (currentLang == "ms") "Sijil ini dengan bangganya dianugerahkan kepada" else "This certificate is proudly presented to", centerX, 1030f, paint)
 
-    // 3. Nama Pelajar (Fokus Utama)
-    val safeStudentName = if (studentName.isNotBlank() && studentName != "Student") studentName else "Pelajar"
-    var studentTextSize = 120f
+    // Student Name
+    val safeStudentName = if (studentName.isNotBlank() && studentName != "Student") studentName else "Student"
+    var studentTextSize = 110f
     paint.textSize = studentTextSize
     paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     paint.color = Color.BLACK
-
-    while (paint.measureText(safeStudentName) > maxTextWidth && studentTextSize > 60f) {
-        studentTextSize -= 5f
+    while (paint.measureText(safeStudentName) > maxTextWidth && studentTextSize > 50f) {
+        studentTextSize -= 4f
         paint.textSize = studentTextSize
     }
-    canvas.drawText(safeStudentName, centerX, 1020f, paint)
+    canvas.drawText(safeStudentName, centerX, 1220f, paint)
 
-    // Garisan Bawah Nama Pelajar
+    // Name Underline
     val nameWidth = paint.measureText(safeStudentName)
-    val linePaint = Paint().apply {
-        color = Color.LTGRAY
-        strokeWidth = 4f
-        isAntiAlias = true
-    }
-    canvas.drawLine(centerX - (nameWidth / 2f) - 100f, 1070f, centerX + (nameWidth / 2f) + 100f, 1070f, linePaint)
+    val linePaint = Paint().apply { color = Color.LTGRAY; strokeWidth = 4f }
+    canvas.drawLine(centerX - (nameWidth / 2f) - 100f, 1280f, centerX + (nameWidth / 2f) + 100f, 1280f, linePaint)
 
-    // 4. ID Pelajar
+    // Student ID
     paint.textSize = 45f
     paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
     paint.color = Color.GRAY
-    canvas.drawText(studentIdLabel, centerX, 1150f, paint)
+    canvas.drawText(if (currentLang == "ms") "No. ID: $studentId" else "Student ID: $studentId", centerX, 1370f, paint)
 
-    // 5. Keterangan Program
+    // Reason Text
     paint.textSize = 48f
     paint.typeface = Typeface.create(Typeface.SERIF, Typeface.ITALIC)
     paint.color = Color.DKGRAY
-    canvas.drawText(reasonText, centerX, 1300f, paint)
+    canvas.drawText(if (currentLang == "ms") "kerana telah berjaya menyertai program / bengkel:" else "for successfully participating in the programme / workshop:", centerX, 1520f, paint)
 
-    // 6. Nama / Tajuk Bengkel (Warna Merah Tema QuickTap)
-    var workshopTextSize = 80f
+    // Workshop Name
+    var workshopTextSize = 75f
     paint.textSize = workshopTextSize
     paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     paint.color = Color.parseColor("#912323")
-
-    while (paint.measureText(workshopName) > maxTextWidth && workshopTextSize > 45f) {
-        workshopTextSize -= 5f
+    while (paint.measureText(workshopName) > maxTextWidth && workshopTextSize > 40f) {
+        workshopTextSize -= 4f
         paint.textSize = workshopTextSize
     }
-    canvas.drawText(workshopName, centerX, 1430f, paint)
+    canvas.drawText(workshopName, centerX, 1650f, paint)
 
-    // 7. Bahagian Bawah: Tarikh (Kiri) & Tandatangan Penganjur (Kanan)
-    paint.textSize = 45f
-    paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
-    paint.color = Color.DKGRAY
-
-    // Tarikh di sebelah kiri bawah
+    // Date & Time (Bottom Left)
     paint.textAlign = Paint.Align.LEFT
-    canvas.drawText(dateLabel, 400f, 2050f, paint)
+    paint.textSize = 45f
+    paint.color = Color.DKGRAY
+    canvas.drawText(if (currentLang == "ms") "Tarikh: $workshopDate | Masa: $workshopTime" else "Date: $workshopDate | Time: $workshopTime", 400f, 2150f, paint)
 
-    // Garisan Tandatangan di sebelah kanan bawah
+    // Authorized Signature (Bottom Right)
     paint.textAlign = Paint.Align.CENTER
-    val sigLineStartX = (pageWidth - 900).toFloat()
-    val sigLineEndX = (pageWidth - 400).toFloat()
-    val sigLineY = 2050f
-
-    val sigLinePaint = Paint().apply {
-        color = Color.DKGRAY
-        strokeWidth = 4f
-        isAntiAlias = true
-    }
-    canvas.drawLine(sigLineStartX, sigLineY, sigLineEndX, sigLineY, sigLinePaint)
-
-    val sigCenterX = (sigLineStartX + sigLineEndX) / 2f
-
-    paint.textSize = 50f
-    paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    val sigX = (pageWidth - 650).toFloat()
+    canvas.drawLine(sigX - 220, 2150f, sigX + 220, 2150f, linePaint)
+    paint.textSize = 45f
     paint.color = Color.BLACK
-    canvas.drawText(organizerLabel, sigCenterX, sigLineY - 30f, paint)
-
-    paint.textSize = 38f
-    paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+    canvas.drawText(organizerName.ifBlank { "QuickTap Organizer" }, sigX, 2110f, paint)
+    paint.textSize = 35f
     paint.color = Color.GRAY
-    val signTitle = if (currentLang == "ms") "Tandatangan Penganjur" else "Authorized Signature"
-    canvas.drawText(signTitle, sigCenterX, sigLineY + 60f, paint)
+    canvas.drawText(if (currentLang == "ms") "Tandatangan Penganjur" else "Authorized Signature", sigX, 2200f, paint)
 
-    // 8. Simpan ke fail PDF
-    val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 1).create()
-    val page = document.startPage(pageInfo)
-    page.canvas.drawBitmap(bitmap, 0f, 0f, null)
     document.finishPage(page)
 
     try {
-        document.writeTo(FileOutputStream(outputPath))
+        FileOutputStream(outputPath).use { fos ->
+            document.writeTo(fos)
+        }
     } catch (e: Exception) {
         e.printStackTrace()
     } finally {

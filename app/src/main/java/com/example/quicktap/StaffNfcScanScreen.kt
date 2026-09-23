@@ -25,10 +25,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.quicktap.AppSettingsState
 import com.google.firebase.Timestamp
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
-import com.google.firebase.firestore.DocumentSnapshot
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -247,7 +248,7 @@ private fun fetchStudentAndProcess(
     val now = Timestamp.now()
     val timeFormatted = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(now.toDate())
 
-    // 1. Check registrations collection first (since student pairing often saves nfcUid or card info directly to registrations or profile mapping)
+    // Cuba semak di koleksi registrations terlebih dahulu (menyokong field nfcUid atau cardUid)
     firestore.collection("registrations")
         .whereEqualTo("workshopId", workshopId)
         .whereEqualTo("nfcUid", nfcUid)
@@ -261,39 +262,68 @@ private fun fetchStudentAndProcess(
 
                 processAttendanceAction(firestore, workshopId, nfcUid, mode, firebaseUid, name, studentIdNum, now, timeFormatted, onSuccess)
             } else {
-                // 2. Fallback to users collection if not found in specific workshop registrations
                 firestore.collection("users")
                     .whereEqualTo("nfcUid", nfcUid)
                     .get()
                     .addOnSuccessListener { userDocs ->
                         if (!userDocs.isEmpty) {
-                            val userDoc = userDocs.documents[0]
-                            val name = userDoc.getString("fullName") ?: userDoc.getString("name") ?: "Student"
-                            val studentIdNum = userDoc.getString("studentId") ?: userDoc.getString("studentNumber") ?: userDoc.getString("matrixNo") ?: "N/A"
-                            val firebaseUid = userDoc.getString("uid") ?: userDoc.id
-
-                            processAttendanceAction(firestore, workshopId, nfcUid, mode, firebaseUid, name, studentIdNum, now, timeFormatted, onSuccess)
+                            handleUserFound(firestore, workshopId, nfcUid, userDocs.documents[0], mode, now, timeFormatted, onSuccess)
                         } else {
-                            // 3. Auto-link Demo Mode if card is completely unlinked, ensuring smooth live exhibition presentations
-                            val randomDemoId = "STU_${nfcUid.takeLast(6)}"
-                            val demoUserData = hashMapOf(
-                                "studentId" to randomDemoId,
-                                "studentNumber" to randomDemoId,
-                                "fullName" to "Demo Student (${nfcUid.takeLast(4)})",
-                                "nfcUid" to nfcUid,
-                                "uid" to randomDemoId,
-                                "program" to "Bachelor of Information Technology"
-                            )
-
-                            firestore.collection("users").document(randomDemoId).set(demoUserData, SetOptions.merge())
-                                .addOnSuccessListener {
-                                    processAttendanceAction(firestore, workshopId, nfcUid, mode, randomDemoId, "Demo Student (${nfcUid.takeLast(4)})", randomDemoId, now, timeFormatted, onSuccess)
-                                }
-                                .addOnFailureListener {
-                                    onSuccess("Demo User", randomDemoId, timeFormatted, "Failed to auto-link demo card.")
+                            firestore.collection("users")
+                                .whereEqualTo("cardUid", nfcUid)
+                                .get()
+                                .addOnSuccessListener { cardDocs ->
+                                    if (!cardDocs.isEmpty) {
+                                        handleUserFound(firestore, workshopId, nfcUid, cardDocs.documents[0], mode, now, timeFormatted, onSuccess)
+                                    } else {
+                                        onSuccess("Unknown", "N/A", timeFormatted, "Kad NFC tidak dipautkan dengan mana-mana akaun pelajar!")
+                                    }
                                 }
                         }
                     }
+            }
+        }
+}
+
+private fun handleUserFound(
+    firestore: FirebaseFirestore,
+    workshopId: String,
+    nfcUid: String,
+    userDoc: DocumentSnapshot,
+    mode: String,
+    now: Timestamp,
+    timeFormatted: String,
+    onSuccess: (String, String, String, String?) -> Unit
+) {
+    val name = userDoc.getString("fullName") ?: userDoc.getString("name") ?: "Student"
+    val studentIdNum = userDoc.getString("studentId") ?: userDoc.getString("studentNumber") ?: userDoc.getString("matrixNo") ?: "N/A"
+    val firebaseUid = userDoc.id
+
+    // Semak sama ada pelajar ini telah mendaftar workshop ini sebelumnya
+    val regDocId = "${workshopId}_$firebaseUid"
+    firestore.collection("registrations").document(regDocId).get()
+        .addOnSuccessListener { regDoc ->
+            if (!regDoc.exists()) {
+                // Pelajar belum daftar workshop secara online, tapi ada kad NFC. Kita auto-daftarkan ke workshop ini.
+                val autoRegData = mapOf(
+                    "workshopId" to workshopId,
+                    "studentId" to firebaseUid,
+                    "studentNumber" to studentIdNum,
+                    "fullName" to name,
+                    "name" to name,
+                    "nfcUid" to nfcUid,
+                    "cardUid" to nfcUid,
+                    "status" to "REGISTERED"
+                )
+                firestore.collection("registrations").document(regDocId).set(autoRegData, SetOptions.merge())
+                    .addOnSuccessListener {
+                        processAttendanceAction(firestore, workshopId, nfcUid, mode, firebaseUid, name, studentIdNum, now, timeFormatted, onSuccess)
+                    }
+                    .addOnFailureListener {
+                        onSuccess(name, studentIdNum, timeFormatted, "Gagal mendaftarkan kehadiran automatik.")
+                    }
+            } else {
+                processAttendanceAction(firestore, workshopId, nfcUid, mode, firebaseUid, name, studentIdNum, now, timeFormatted, onSuccess)
             }
         }
 }
@@ -313,54 +343,172 @@ private fun processAttendanceAction(
     val lowerMode = mode.lowercase(Locale.getDefault())
     val isCheckOutMode = lowerMode.contains("out") || lowerMode.contains("checkout")
 
-    val docId = "${workshopId}_$firebaseUid"
-    val docRef = firestore.collection("registrations").document(docId)
-
-    docRef.get().addOnSuccessListener { existingDoc ->
-        if (isCheckOutMode) {
-            if (existingDoc.exists() && existingDoc.get("checkOutTime") != null) {
-                onSuccess(name, studentNumber, timeFormatted, "$name has already completed Check-Out!")
-                return@addOnSuccessListener
-            }
-            if (!existingDoc.exists() || existingDoc.get("timestamp") == null) {
-                onSuccess(name, studentNumber, timeFormatted, "$name has not checked in yet!")
-                return@addOnSuccessListener
-            }
-        } else {
-            if (existingDoc.exists() && existingDoc.get("timestamp") != null && existingDoc.get("checkOutTime") == null) {
-                onSuccess(name, studentNumber, timeFormatted, "$name has already checked in!")
-                return@addOnSuccessListener
-            }
-        }
-
-        val updates = mutableMapOf<String, Any>(
-            "status" to "PRESENT",
-            "workshopId" to workshopId,
-            "nfcUid" to nfcUid,
-            "studentName" to name,
-            "studentId" to firebaseUid,
-            "studentNumber" to studentNumber,
-            "certificateStatus" to "Pending"
-        )
-
-        if (isCheckOutMode) {
-            updates["checkOutTime"] = now
-            updates["mode"] = "Check-Out"
-        } else {
-            updates["timestamp"] = now
-            updates["mode"] = "Check-In"
-        }
-
-        docRef.set(updates, SetOptions.merge())
-            .addOnSuccessListener {
-                if (isCheckOutMode) {
-                    autoIssueCertificate(firestore, workshopId, firebaseUid, name, studentNumber)
+    firestore.collection("workshops").document(workshopId).get()
+        .addOnSuccessListener { workshopDoc ->
+            if (workshopDoc.exists()) {
+                val isTimeValid = validateWorkshopWindowRobust(workshopDoc, isCheckOutMode)
+                if (!isTimeValid) {
+                    val windowMsg = if (isCheckOutMode)
+                        "Check-Out only allowed 30 mins before/after workshop end time!"
+                    else
+                        "Check-In only allowed 30 mins before/after workshop start time!"
+                    onSuccess(name, studentNumber, timeFormatted, windowMsg)
+                    return@addOnSuccessListener
                 }
-                onSuccess(name, studentNumber, timeFormatted, null)
             }
-            .addOnFailureListener {
-                onSuccess(name, studentNumber, timeFormatted, "Failed to save attendance record to Firestore")
+
+            // Menggunakan format ID dokumen yang diselaraskan: `${workshopId}_$firebaseUid`
+            val docId = "${workshopId}_$firebaseUid"
+            val docRef = firestore.collection("registrations").document(docId)
+
+            docRef.get().addOnSuccessListener { existingDoc ->
+                val hasCheckedIn = existingDoc.exists() && existingDoc.get("timestamp") != null
+                val hasCheckedOut = existingDoc.exists() && existingDoc.get("checkOutTime") != null
+
+                if (hasCheckedIn && hasCheckedOut) {
+                    onSuccess(name, studentNumber, timeFormatted, "$name has already completed attendance (Check-In & Check-Out)!")
+                    return@addOnSuccessListener
+                }
+
+                if (isCheckOutMode) {
+                    if (hasCheckedOut) {
+                        onSuccess(name, studentNumber, timeFormatted, "$name has already completed Check-Out!")
+                        return@addOnSuccessListener
+                    }
+                    if (!hasCheckedIn) {
+                        onSuccess(name, studentNumber, timeFormatted, "$name has not checked in yet!")
+                        return@addOnSuccessListener
+                    }
+                } else {
+                    if (hasCheckedIn) {
+                        onSuccess(name, studentNumber, timeFormatted, "$name has already checked in!")
+                        return@addOnSuccessListener
+                    }
+                }
+
+                val updates = mutableMapOf<String, Any>(
+                    "status" to "PRESENT", // Status dikemas kini kepada PRESENT supaya sistem mengira pelajar hadir
+                    "workshopId" to workshopId,
+                    "nfcUid" to nfcUid,
+                    "cardUid" to nfcUid,
+                    "studentName" to name,
+                    "fullName" to name,
+                    "studentId" to firebaseUid,
+                    "studentNumber" to studentNumber,
+                    "certificateStatus" to "Pending"
+                )
+
+                if (isCheckOutMode) {
+                    updates["checkOutTime"] = now
+                    updates["mode"] = "Check-Out"
+                } else {
+                    updates["timestamp"] = now
+                    updates["mode"] = "Check-In"
+                }
+
+                docRef.set(updates, SetOptions.merge())
+                    .addOnSuccessListener {
+                        if (isCheckOutMode) {
+                            autoIssueCertificate(firestore, workshopId, firebaseUid, name, studentNumber)
+                        }
+                        onSuccess(name, studentNumber, timeFormatted, null)
+                    }
+                    .addOnFailureListener {
+                        onSuccess(name, studentNumber, timeFormatted, "Failed to save attendance record to Firestore")
+                    }
             }
+        }
+        .addOnFailureListener {
+            onSuccess(name, studentNumber, timeFormatted, "Failed to fetch workshop timing details.")
+        }
+}
+
+// Robust validation supporting 12-hour, 24-hour, and Firestore Timestamps safely
+private fun validateWorkshopWindowRobust(workshopDoc: DocumentSnapshot, isCheckOut: Boolean): Boolean {
+    try {
+        val calendarTarget = Calendar.getInstance()
+
+        val dateObj = workshopDoc.get("date") ?: workshopDoc.get("workshopDate") ?: workshopDoc.get("tarikh")
+        if (dateObj is Timestamp) {
+            calendarTarget.time = dateObj.toDate()
+        } else if (dateObj is String && dateObj.isNotBlank()) {
+            val dateFormats = listOf(
+                SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH),
+                SimpleDateFormat("dd/MM/yyyy", Locale.ENGLISH),
+                SimpleDateFormat("yyyy/MM/dd", Locale.ENGLISH),
+                SimpleDateFormat("dd-MM-yyyy", Locale.ENGLISH)
+            )
+            var parsedDate: Date? = null
+            for (fmt in dateFormats) {
+                try {
+                    parsedDate = fmt.parse(dateObj)
+                    if (parsedDate != null) break
+                } catch (_: Exception) {}
+            }
+            if (parsedDate != null) {
+                val tempCal = Calendar.getInstance().apply { time = parsedDate }
+                calendarTarget.set(Calendar.YEAR, tempCal.get(Calendar.YEAR))
+                calendarTarget.set(Calendar.MONTH, tempCal.get(Calendar.MONTH))
+                calendarTarget.set(Calendar.DAY_OF_MONTH, tempCal.get(Calendar.DAY_OF_MONTH))
+            }
+        }
+
+        val timeKey = if (isCheckOut) "endTime" else {
+            when {
+                workshopDoc.get("startTime") != null -> "startTime"
+                workshopDoc.get("time") != null -> "time"
+                workshopDoc.get("start") != null -> "start"
+                else -> "startTime"
+            }
+        }
+        val timeObj = workshopDoc.get(timeKey) ?: workshopDoc.get("time") ?: workshopDoc.get("startTime") ?: if (isCheckOut) "05:00 PM" else "12:00 PM"
+
+        val timeCalendar = Calendar.getInstance()
+        var timeParsed = false
+
+        if (timeObj is Timestamp) {
+            timeCalendar.time = timeObj.toDate()
+            timeParsed = true
+        } else if (timeObj is String && timeObj.isNotBlank()) {
+            val timeFormats = listOf(
+                SimpleDateFormat("hh:mm a", Locale.ENGLISH),
+                SimpleDateFormat("h:mm a", Locale.ENGLISH),
+                SimpleDateFormat("HH:mm", Locale.ENGLISH),
+                SimpleDateFormat("H:mm", Locale.ENGLISH),
+                SimpleDateFormat("hh:mm", Locale.ENGLISH)
+            )
+            for (fmt in timeFormats) {
+                try {
+                    val parsedTime = fmt.parse(timeObj.trim())
+                    if (parsedTime != null) {
+                        timeCalendar.time = parsedTime
+                        timeParsed = true
+                        break
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        if (timeParsed) {
+            calendarTarget.set(Calendar.HOUR_OF_DAY, timeCalendar.get(Calendar.HOUR_OF_DAY))
+            calendarTarget.set(Calendar.MINUTE, timeCalendar.get(Calendar.MINUTE))
+            calendarTarget.set(Calendar.SECOND, 0)
+            calendarTarget.set(Calendar.MILLISECOND, 0)
+        } else {
+            return true
+        }
+
+        val targetMillis = calendarTarget.timeInMillis
+        val currentMillis = System.currentTimeMillis()
+
+        val toleranceMillis = 30 * 60 * 1000L
+        val lowerBound = targetMillis - toleranceMillis
+        val upperBound = targetMillis + toleranceMillis
+
+        return currentMillis in lowerBound..upperBound
+    } catch (e: Exception) {
+        e.printStackTrace()
+        return true
     }
 }
 

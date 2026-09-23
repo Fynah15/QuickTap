@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
@@ -94,8 +95,10 @@ fun CertificateScreen(
 
     DisposableEffect(workshopId, studentId) {
         val certDocId = "${workshopId}_$studentId"
+        var certListener: ListenerRegistration? = null
+        var regListener: ListenerRegistration? = null
 
-        val certListener = firestore.collection("certificates").document(certDocId)
+        certListener = firestore.collection("certificates").document(certDocId)
             .addSnapshotListener { certDoc, _ ->
                 if (certDoc != null && certDoc.exists()) {
                     val rawName = certDoc.getString("studentName") ?: "Student"
@@ -109,42 +112,62 @@ fun CertificateScreen(
                     isEligible = true
                     isLoading = false
                 } else {
-                    firestore.collection("users").document(studentId).get().addOnSuccessListener { userDoc ->
-                        if (userDoc.exists()) {
-                            matrixNumber = userDoc.getString("studentId") ?: userDoc.getString("studentNumber") ?: "-"
-                        }
-                    }
-
-                    firestore.collection("registrations").document(certDocId).get()
-                        .addOnSuccessListener { regDoc ->
-                            if (regDoc.exists()) {
-                                val rawName = regDoc.getString("studentName") ?: regDoc.getString("name") ?: "Student"
-                                studentName = if (rawName.isNotBlank() && rawName != studentId) rawName else "Student"
-
-                                if (matrixNumber == "-") {
-                                    matrixNumber = regDoc.getString("studentNumber") ?: "-"
-                                }
-
-                                val hasCheckedIn = regDoc.get("timestamp") != null || regDoc.get("checkInTimestamp") != null
-                                val hasCheckedOut = regDoc.get("checkOutTime") != null || regDoc.get("checkOutTimestamp") != null || regDoc.get("timeout") != null
-                                val isSent = regDoc.getString("certificateStatus") == "Sent"
-
-                                isEligible = (hasCheckedIn && hasCheckedOut) || isSent
-                            } else {
-                                studentName = "Student"
-                                isEligible = false
+                    regListener = firestore.collection("registrations")
+                        .whereEqualTo("workshopId", workshopId)
+                        .addSnapshotListener { querySnapshot, error ->
+                            if (error != null) {
+                                isLoading = false
+                                return@addSnapshotListener
                             }
-                            isLoading = false
-                        }
-                        .addOnFailureListener {
-                            studentName = "Student"
-                            isEligible = false
+
+                            var foundMatchAndEligible = false
+
+                            if (querySnapshot != null) {
+                                for (doc in querySnapshot.documents) {
+                                    val sId = doc.getString("studentId") ?: ""
+                                    val uId = doc.getString("userId") ?: ""
+                                    val sNum = doc.getString("studentNumber") ?: ""
+
+                                    // Semak padanan dengan studentId, userId, studentNumber, atau ID dokumen
+                                    val isUserMatch = sId == studentId ||
+                                            uId == studentId ||
+                                            sNum == studentId ||
+                                            doc.id.contains(studentId) ||
+                                            doc.id == certDocId
+
+                                    if (isUserMatch) {
+                                        val rawName = doc.getString("studentName") ?: doc.getString("name") ?: doc.getString("fullName") ?: "Student"
+                                        studentName = if (rawName.isNotBlank() && rawName != studentId) rawName else "Student"
+                                        matrixNumber = doc.getString("studentNumber") ?: doc.getString("studentId") ?: "-"
+
+                                        val certificateStatus = doc.getString("certificateStatus")
+                                        val checkOutTime = doc.get("checkOutTime")
+                                        val regStatus = doc.getString("status") ?: ""
+
+                                        // Syarat yang sepadan dengan struktur Firestore anda ("PRESENT", wujud checkOutTime, atau "Sent")
+                                        val hasCheckedOut = checkOutTime != null
+                                        val isPresent = regStatus.equals("PRESENT", ignoreCase = true) ||
+                                                regStatus.equals("Completed", ignoreCase = true) ||
+                                                regStatus.equals("Checked Out", ignoreCase = true)
+
+                                        if (certificateStatus == "Sent" || hasCheckedOut || isPresent) {
+                                            foundMatchAndEligible = true
+                                            break
+                                        }
+                                    }
+                                }
+                            }
+
+                            isEligible = foundMatchAndEligible
                             isLoading = false
                         }
                 }
             }
 
-        onDispose { certListener.remove() }
+        onDispose {
+            certListener?.remove()
+            regListener?.remove()
+        }
     }
 
     Scaffold(
@@ -158,44 +181,28 @@ fun CertificateScreen(
                     label = { Text(navHome, color = Color.White) },
                     selected = false,
                     onClick = onHomeClick,
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.White,
-                        unselectedIconColor = Color.White.copy(alpha = 0.7f),
-                        indicatorColor = Color(0xFF7A1B1B)
-                    )
+                    colors = NavigationBarItemDefaults.colors(selectedIconColor = Color.White, unselectedIconColor = Color.White.copy(alpha = 0.7f), indicatorColor = Color(0xFF7A1B1B))
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.DateRange, contentDescription = navWorkshop) },
                     label = { Text(navWorkshop, color = Color.White) },
                     selected = false,
                     onClick = onWorkshopClick,
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.White,
-                        unselectedIconColor = Color.White.copy(alpha = 0.7f),
-                        indicatorColor = Color(0xFF7A1B1B)
-                    )
+                    colors = NavigationBarItemDefaults.colors(selectedIconColor = Color.White, unselectedIconColor = Color.White.copy(alpha = 0.7f), indicatorColor = Color(0xFF7A1B1B))
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.WorkspacePremium, contentDescription = navCertificate) },
                     label = { Text(navCertificate, color = Color.White) },
                     selected = true,
                     onClick = onCertificateClick,
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.White,
-                        unselectedIconColor = Color.White.copy(alpha = 0.7f),
-                        indicatorColor = Color(0xFF7A1B1B)
-                    )
+                    colors = NavigationBarItemDefaults.colors(selectedIconColor = Color.White, unselectedIconColor = Color.White.copy(alpha = 0.7f), indicatorColor = Color(0xFF7A1B1B))
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Settings, contentDescription = navSettings) },
                     label = { Text(navSettings, color = Color.White) },
                     selected = false,
                     onClick = onSettingsClick,
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.White,
-                        unselectedIconColor = Color.White.copy(alpha = 0.7f),
-                        indicatorColor = Color(0xFF7A1B1B)
-                    )
+                    colors = NavigationBarItemDefaults.colors(selectedIconColor = Color.White, unselectedIconColor = Color.White.copy(alpha = 0.7f), indicatorColor = Color(0xFF7A1B1B))
                 )
             }
         },
@@ -209,9 +216,8 @@ fun CertificateScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center // Mengatur kandungan supaya berada di tengah skrin
+            verticalArrangement = Arrangement.Center
         ) {
-            // --- KAD PREBIU SIJIL ---
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -305,7 +311,6 @@ fun CertificateScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // --- BUTANG MUAT TURUN ---
             Button(
                 onClick = {
                     if (isEligible) {
@@ -321,6 +326,7 @@ fun CertificateScreen(
                                 workshopDate = workshopDate,
                                 workshopTime = workshopTime,
                                 organizerName = organizerName,
+                                currentLang = currentLang,
                                 outputPath = tempFile
                             )
 

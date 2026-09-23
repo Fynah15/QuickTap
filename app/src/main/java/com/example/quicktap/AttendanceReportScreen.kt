@@ -1,13 +1,5 @@
 package com.example.quicktap
 
-import android.content.ContentValues
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
-import android.widget.Toast
-import android.content.Context
-import android.graphics.Paint
-import android.graphics.pdf.PdfDocument
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -30,9 +22,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.firebase.firestore.FirebaseFirestore
-import java.io.File
-import java.io.FileOutputStream
-import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -51,11 +40,15 @@ fun AttendanceReportScreen(
 
     var studentList by remember { mutableStateOf(listOf<LiveStudentRow>()) }
     var totalRegisteredCount by remember { mutableIntStateOf(0) }
+    var presentCount by remember { mutableIntStateOf(0) }
+    var absentCount by remember { mutableIntStateOf(0) }
     var workshopTitleName by remember { mutableStateOf("Loading Workshop...") }
+    var isWorkshopNotFound by remember { mutableStateOf(false) }
     var bottomNavIndex by remember { mutableIntStateOf(1) }
 
     val currentLang = AppSettingsState.currentLanguage
     val defaultTitleText = if (currentLang == "ms") "Laporan Kehadiran Firebase" else "Firebase Workshop Attendance"
+    val workshopNotFoundText = if (currentLang == "ms") "Tiada bengkel dipilih atau maklumat bengkel tidak dijumpai." else "No workshop selected or workshop information not found."
     val totalRegisteredLabel = if (currentLang == "ms") "Jumlah Pelajar Berdaftar" else "Total Students Registered"
     val presentLabel = if (currentLang == "ms") "Hadir" else "Present"
     val absentLabel = if (currentLang == "ms") "Tidak Hadir" else "Absent"
@@ -64,11 +57,7 @@ fun AttendanceReportScreen(
     val studentNameHeader = if (currentLang == "ms") "Nama Pelajar" else "Student Name"
     val inHeader = if (currentLang == "ms") "Masuk" else "In"
     val outHeader = if (currentLang == "ms") "Keluar" else "Out"
-    val downloadReportText = if (currentLang == "ms") "Muat Turun Laporan" else "Download Report"
-    val noRecordsText = if (currentLang == "ms") "Tiada rekod kehadiran NFC dijumpai." else "No NFC attendance records found."
-
-    val pdfSavedToast = if (currentLang == "ms") "PDF berjaya disimpan ke Download!" else "PDF successfully saved to Downloads!"
-    val pdfErrorToast = if (currentLang == "ms") "Gagal menjana atau menyimpan PDF." else "Failed to generate or save PDF."
+    val noRecordsText = if (currentLang == "ms") "Tiada rekod kehadiran dijumpai." else "No attendance records found."
 
     val navHomeLabel = if (currentLang == "ms") "Utama" else "Home"
     val navReportLabel = if (currentLang == "ms") "Laporan" else "Report"
@@ -85,64 +74,76 @@ fun AttendanceReportScreen(
     val presentCardColor = if (isDark) Color(0xFF2E6930) else Color(0xFF81C784)
     val absentCardColor = if (isDark) Color(0xFF783131) else Color(0xFFE57373)
 
+    val updateState: (List<LiveStudentRow>) -> Unit = { allRows ->
+        val uniqueStudents = allRows.distinctBy { it.studentKey }
+        totalRegisteredCount = uniqueStudents.size
+        presentCount = uniqueStudents.count { it.checkIn != "-" }
+        absentCount = uniqueStudents.count { it.checkIn == "-" }
+        studentList = uniqueStudents.filter { it.checkIn != "-" }.sortedBy { it.name }
+    }
+
     DisposableEffect(workshopId) {
-        val workshopRef = firestore.collection("workshops").document(workshopId)
-        val workshopListener = workshopRef.addSnapshotListener { snapshot, error ->
-            if (error != null) return@addSnapshotListener
-            if (snapshot != null && snapshot.exists()) {
-                val name = snapshot.getString("name") ?: snapshot.getString("title") ?: defaultTitleText
-                workshopTitleName = name
-            } else {
-                workshopTitleName = defaultTitleText
+        // Jika workshopId kosong, terus tandakan sebagai tidak wujud
+        if (workshopId.isBlank()) {
+            isWorkshopNotFound = true
+            workshopTitleName = if (currentLang == "ms") "Tiada Bengkel" else "No Workshop"
+            return@DisposableEffect object : DisposableEffectResult {
+                override fun dispose() {}
             }
         }
 
-        // Ambil senarai pendaftaran sebenar untuk mengira jumlah kapasiti/berdaftar yang tepat
+        val workshopRef = firestore.collection("workshops").document(workshopId)
+        val workshopListener = workshopRef.addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null || !snapshot.exists()) {
+                isWorkshopNotFound = true
+                workshopTitleName = if (currentLang == "ms") "Tiada Bengkel" else "No Workshop"
+                return@addSnapshotListener
+            }
+
+            val name = snapshot.getString("name") ?: snapshot.getString("title") ?: defaultTitleText
+            workshopTitleName = name
+            isWorkshopNotFound = false
+        }
+
         val registrationListener = firestore.collection("registrations")
             .whereEqualTo("workshopId", workshopId)
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null) return@addSnapshotListener
-                totalRegisteredCount = snapshot.size()
 
                 val studentMap = mutableMapOf<String, LiveStudentRow>()
 
                 for (doc in snapshot.documents) {
-                    val studentId = doc.getString("studentId") ?: doc.id
-                    val studentKey = studentId
-
+                    val studentId = doc.getString("studentId") ?: doc.getString("userId") ?: doc.id
                     val hasCheckedIn = AttendanceUtils.hasNfcCheckIn(doc)
                     val hasCheckedOut = AttendanceUtils.hasNfcCheckOut(doc)
 
-                    if (!hasCheckedIn && !hasCheckedOut) {
-                        continue
-                    }
-
-                    val studentName = AttendanceUtils.resolveStudentName(doc, fallbackId = "Student")
-
-                    val timestampField = doc.get("timestamp") ?: doc.get("checkInTimestamp")
+                    val fetchedName = AttendanceUtils.resolveStudentName(doc, fallbackId = "")
+                    val timestampField = doc.get("timestamp") ?: doc.get("checkInTimestamp") ?: doc.get("checkInTime")
                     val checkOutTimeField = doc.get("checkOutTime") ?: doc.get("checkOutTimestamp") ?: doc.get("timeout")
 
                     val formattedCheckIn = if (hasCheckedIn) AttendanceUtils.formatTimestamp(timestampField) else "-"
                     val formattedCheckOut = if (hasCheckedOut) AttendanceUtils.formatTimestamp(checkOutTimeField) else "-"
 
-                    if (studentMap.containsKey(studentKey)) {
-                        val existing = studentMap[studentKey]!!
-                        if (formattedCheckIn != "-") existing.checkIn = formattedCheckIn
-                        if (formattedCheckOut != "-") existing.checkOut = formattedCheckOut
-                        if (studentName != "Student") {
-                            existing.name = studentName
-                        }
-                    } else {
-                        studentMap[studentKey] = LiveStudentRow(
-                            studentKey = studentKey,
-                            name = studentName,
-                            checkIn = formattedCheckIn,
-                            checkOut = formattedCheckOut
-                        )
+                    val existingRow = studentMap[studentId]
+                    val finalCheckIn = if (formattedCheckIn != "-") formattedCheckIn else (existingRow?.checkIn ?: "-")
+                    val finalCheckOut = if (formattedCheckOut != "-") formattedCheckOut else (existingRow?.checkOut ?: "-")
+
+                    val finalName = when {
+                        fetchedName.isNotBlank() && fetchedName != "Student" -> fetchedName
+                        existingRow != null && existingRow.name.isNotBlank() && existingRow.name != "Student" -> existingRow.name
+                        fetchedName.isNotBlank() -> fetchedName
+                        else -> "Student"
                     }
+
+                    studentMap[studentId] = LiveStudentRow(
+                        studentKey = studentId,
+                        name = finalName,
+                        checkIn = finalCheckIn,
+                        checkOut = finalCheckOut
+                    )
                 }
 
-                studentList = studentMap.values.toList()
+                updateState(studentMap.values.toList())
             }
 
         onDispose {
@@ -150,10 +151,6 @@ fun AttendanceReportScreen(
             registrationListener.remove()
         }
     }
-
-    // Pengiraan Present dan Absent yang Tepat
-    val presentCount = studentList.size
-    val absentCount = if (totalRegisteredCount >= presentCount) totalRegisteredCount - presentCount else 0
 
     Scaffold(
         topBar = {
@@ -174,230 +171,152 @@ fun AttendanceReportScreen(
                     label = { Text(navHomeLabel, fontSize = 11.sp, color = Color.White) },
                     selected = bottomNavIndex == 0,
                     onClick = { bottomNavIndex = 0; onHomeClick() },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.White,
-                        unselectedIconColor = Color.White,
-                        selectedTextColor = Color.White,
-                        unselectedTextColor = Color.White,
-                        indicatorColor = Color.Transparent
-                    )
+                    colors = NavigationBarItemDefaults.colors(selectedIconColor = Color.White, unselectedIconColor = Color.White, selectedTextColor = Color.White, unselectedTextColor = Color.White, indicatorColor = Color.Transparent)
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = navReportLabel) },
                     label = { Text(navReportLabel, fontSize = 11.sp, color = Color.White) },
                     selected = bottomNavIndex == 1,
                     onClick = { bottomNavIndex = 1; onReportClick() },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.White,
-                        unselectedIconColor = Color.White,
-                        selectedTextColor = Color.White,
-                        unselectedTextColor = Color.White,
-                        indicatorColor = Color.Transparent
-                    )
+                    colors = NavigationBarItemDefaults.colors(selectedIconColor = Color.White, unselectedIconColor = Color.White, selectedTextColor = Color.White, unselectedTextColor = Color.White, indicatorColor = Color.Transparent)
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.WorkspacePremium, contentDescription = navCertLabel) },
                     label = { Text(navCertLabel, fontSize = 11.sp, color = Color.White) },
                     selected = bottomNavIndex == 2,
                     onClick = { bottomNavIndex = 2; onCertificateClick() },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.White,
-                        unselectedIconColor = Color.White,
-                        selectedTextColor = Color.White,
-                        unselectedTextColor = Color.White,
-                        indicatorColor = Color.Transparent
-                    )
+                    colors = NavigationBarItemDefaults.colors(selectedIconColor = Color.White, unselectedIconColor = Color.White, selectedTextColor = Color.White, unselectedTextColor = Color.White, indicatorColor = Color.Transparent)
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Settings, contentDescription = navSettingsLabel) },
                     label = { Text(navSettingsLabel, fontSize = 11.sp, color = Color.White) },
                     selected = bottomNavIndex == 3,
                     onClick = { bottomNavIndex = 3; onSettingsClick() },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.White,
-                        unselectedIconColor = Color.White,
-                        selectedTextColor = Color.White,
-                        unselectedTextColor = Color.White,
-                        indicatorColor = Color.Transparent
-                    )
+                    colors = NavigationBarItemDefaults.colors(selectedIconColor = Color.White, unselectedIconColor = Color.White, selectedTextColor = Color.White, unselectedTextColor = Color.White, indicatorColor = Color.Transparent)
                 )
             }
         },
         containerColor = backgroundColor
     ) { paddingValues ->
         Column(
-            modifier = Modifier.fillMaxSize().background(backgroundColor).padding(paddingValues).padding(16.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(backgroundColor)
+                .padding(paddingValues)
+                .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Card(modifier = Modifier.weight(1f).height(95.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF912323)), shape = RoundedCornerShape(12.dp)) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(totalRegisteredLabel, fontSize = 9.sp, color = Color.White.copy(alpha = 0.8f), fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text("$totalRegisteredCount", fontWeight = FontWeight.Bold, fontSize = 24.sp, color = Color.White)
+            // Jika tiada workshop dijumpai atau ID kosong, paparkan mesej sahaja dan sembunyikan semua laporan/statistik
+            if (isWorkshopNotFound) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = workshopNotFoundText,
+                        color = secondaryTextColor,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Card(
+                        modifier = Modifier.weight(1f).height(95.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF912323)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(totalRegisteredLabel, fontSize = 9.sp, color = Color.White.copy(alpha = 0.8f), fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text("$totalRegisteredCount", fontWeight = FontWeight.Bold, fontSize = 24.sp, color = Color.White)
+                            }
+                        }
+                    }
+
+                    Card(
+                        modifier = Modifier.weight(1.3f).height(95.dp),
+                        colors = CardDefaults.cardColors(containerColor = statsCardBg),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxSize().padding(6.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(attendanceTodayLabel, fontSize = 9.sp, color = secondaryTextColor, fontWeight = FontWeight.SemiBold)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Card(
+                                    colors = CardDefaults.cardColors(containerColor = presentCardColor),
+                                    modifier = Modifier.size(50.dp, 45.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.fillMaxSize(),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Text("$presentCount", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                                        Text(presentLabel, fontSize = 7.sp, color = Color.White)
+                                    }
+                                }
+                                Card(
+                                    colors = CardDefaults.cardColors(containerColor = absentCardColor),
+                                    modifier = Modifier.size(50.dp, 45.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.fillMaxSize(),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Text("$absentCount", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                                        Text(absentLabel, fontSize = 7.sp, color = Color.White)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
 
-                Card(modifier = Modifier.weight(1.3f).height(95.dp), colors = CardDefaults.cardColors(containerColor = statsCardBg), shape = RoundedCornerShape(12.dp)) {
-                    Column(modifier = Modifier.fillMaxSize().padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(attendanceTodayLabel, fontSize = 9.sp, color = secondaryTextColor, fontWeight = FontWeight.SemiBold)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Card(colors = CardDefaults.cardColors(containerColor = presentCardColor), modifier = Modifier.size(50.dp, 45.dp), shape = RoundedCornerShape(6.dp)) {
-                                Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                                    Text("$presentCount", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
-                                    Text(presentLabel, fontSize = 7.sp, color = Color.White)
-                                }
-                            }
-                            Card(colors = CardDefaults.cardColors(containerColor = absentCardColor), modifier = Modifier.size(50.dp, 45.dp), shape = RoundedCornerShape(6.dp)) {
-                                Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                                    Text("$absentCount", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
-                                    Text(absentLabel, fontSize = 7.sp, color = Color.White)
-                                }
-                            }
+                Card(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    colors = CardDefaults.cardColors(containerColor = cardBgColor),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Row(modifier = Modifier.fillMaxWidth().background(tableHeaderBg).padding(12.dp)) {
+                            Text(studentNameHeader, modifier = Modifier.weight(1.5f), fontWeight = FontWeight.Bold, fontSize = 11.sp, color = secondaryTextColor)
+                            Text(inHeader, modifier = Modifier.weight(1f), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold, fontSize = 11.sp, color = secondaryTextColor)
+                            Text(outHeader, modifier = Modifier.weight(1f), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold, fontSize = 11.sp, color = secondaryTextColor)
                         }
-                    }
-                }
-            }
-
-            Card(modifier = Modifier.fillMaxWidth().weight(1f), colors = CardDefaults.cardColors(containerColor = cardBgColor), shape = RoundedCornerShape(12.dp)) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    Row(modifier = Modifier.fillMaxWidth().background(tableHeaderBg).padding(12.dp)) {
-                        Text(studentNameHeader, modifier = Modifier.weight(1.5f), fontWeight = FontWeight.Bold, fontSize = 11.sp, color = secondaryTextColor)
-                        Text(inHeader, modifier = Modifier.weight(1f), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold, fontSize = 11.sp, color = secondaryTextColor)
-                        Text(outHeader, modifier = Modifier.weight(1f), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold, fontSize = 11.sp, color = secondaryTextColor)
-                    }
-                    if (studentList.isEmpty()) {
-                        Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                            Text(noRecordsText, fontSize = 12.sp, color = secondaryTextColor)
-                        }
-                    } else {
-                        LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                            items(studentList, key = { it.studentKey }) { student ->
-                                Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text(student.name, modifier = Modifier.weight(1.5f), fontSize = 12.sp, fontWeight = FontWeight.Medium, color = textColor)
-                                    Text(student.checkIn, modifier = Modifier.weight(1f), textAlign = TextAlign.Center, fontSize = 12.sp, color = secondaryTextColor)
-                                    Text(student.checkOut, modifier = Modifier.weight(1f), textAlign = TextAlign.Center, fontSize = 12.sp, color = secondaryTextColor)
-                                }
-                                HorizontalDivider(color = if (isDark) Color(0xFF2C2C2C) else Color(0xFFF0F0F0), thickness = 0.5.dp)
-                            }
-                        }
-                    }
-                }
-            }
-
-            Button(
-                onClick = {
-                    try {
-                        val fileName = "Attendance_${workshopTitleName.replace(" ", "_")}_${System.currentTimeMillis()}.pdf"
-                        val tempFile = File(context.cacheDir, fileName)
-
-                        generateAttendancePdfToFile(context, workshopTitleName, studentList, tempFile)
-
-                        if (tempFile.exists()) {
-                            val saved = saveReportFileToPublicDownloads(context, tempFile, fileName)
-                            if (saved) {
-                                Toast.makeText(context, pdfSavedToast, Toast.LENGTH_LONG).show()
-                            } else {
-                                Toast.makeText(context, pdfErrorToast, Toast.LENGTH_LONG).show()
+                        if (studentList.isEmpty()) {
+                            Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                                Text(noRecordsText, fontSize = 12.sp, color = secondaryTextColor)
                             }
                         } else {
-                            Toast.makeText(context, pdfErrorToast, Toast.LENGTH_LONG).show()
+                            LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                                items(studentList, key = { it.studentKey }) { student ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(student.name, modifier = Modifier.weight(1.5f), fontSize = 12.sp, fontWeight = FontWeight.Medium, color = textColor)
+                                        Text(student.checkIn, modifier = Modifier.weight(1f), textAlign = TextAlign.Center, fontSize = 12.sp, color = secondaryTextColor)
+                                        Text(student.checkOut, modifier = Modifier.weight(1f), textAlign = TextAlign.Center, fontSize = 12.sp, color = secondaryTextColor)
+                                    }
+                                    HorizontalDivider(color = if (isDark) Color(0xFF2C2C2C) else Color(0xFFF0F0F0), thickness = 0.5.dp)
+                                }
+                            }
                         }
-                    } catch (e: Exception) {
-                        Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
                     }
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A90E2)),
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text(downloadReportText, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
-    }
-}
-
-private fun generateAttendancePdfToFile(context: Context, workshopName: String, studentList: List<LiveStudentRow>, outputFile: File) {
-    val pdfDocument = PdfDocument()
-    val paint = Paint()
-    val titlePaint = Paint()
-
-    val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create()
-    val page = pdfDocument.startPage(pageInfo)
-    val canvas = page.canvas
-
-    titlePaint.textSize = 20f
-    titlePaint.isFakeBoldText = true
-    canvas.drawText("QuickTap: Attendance Report", 40f, 50f, titlePaint)
-
-    paint.textSize = 14f
-    canvas.drawText("Workshop: $workshopName", 40f, 80f, paint)
-    canvas.drawText("Date: ${SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(Date())}", 40f, 100f, paint)
-
-    paint.isFakeBoldText = true
-    canvas.drawText("No", 40f, 140f, paint)
-    canvas.drawText("Student Name", 80f, 140f, paint)
-    canvas.drawText("Student ID", 300f, 140f, paint)
-    canvas.drawText("In", 450f, 140f, paint)
-    canvas.drawText("Out", 520f, 140f, paint)
-
-    paint.isFakeBoldText = false
-    var yPos = 170f
-    var index = 1
-    for (student in studentList) {
-        if (yPos > 800) break
-        canvas.drawText("$index.", 40f, yPos, paint)
-        canvas.drawText(student.name, 80f, yPos, paint)
-        canvas.drawText(student.studentKey, 300f, yPos, paint)
-        canvas.drawText(student.checkIn, 450f, yPos, paint)
-        canvas.drawText(student.checkOut, 520f, yPos, paint)
-        yPos += 25f
-        index++
-    }
-
-    pdfDocument.finishPage(page)
-
-    try {
-        pdfDocument.writeTo(FileOutputStream(outputFile))
-    } catch (e: Exception) {
-        e.printStackTrace()
-    } finally {
-        pdfDocument.close()
-    }
-}
-
-private fun saveReportFileToPublicDownloads(context: Context, sourceFile: File, fileName: String): Boolean {
-    return try {
-        var outputStream: OutputStream? = null
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val contentValues = ContentValues().apply {
-                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
-                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-            }
-            val resolver = context.contentResolver
-            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
-            if (uri != null) {
-                outputStream = resolver.openOutputStream(uri)
-            }
-        } else {
-            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            if (!downloadsDir.exists()) downloadsDir.mkdirs()
-            val destinationFile = File(downloadsDir, fileName)
-            outputStream = FileOutputStream(destinationFile)
-        }
-
-        outputStream?.use { output ->
-            sourceFile.inputStream().use { input ->
-                input.copyTo(output)
-            }
-        }
-        true
-    } catch (e: Exception) {
-        false
     }
 }

@@ -3,7 +3,7 @@ package com.example.quicktap.worker
 import android.content.Context
 import androidx.work.Worker
 import androidx.work.WorkerParameters
-import com.example.quicktap.service.LocalNotificationService
+import com.example.quicktap.LocalNotificationService
 
 class WorkshopReminderWorker(context: Context, workerParams: WorkerParameters) : Worker(context, workerParams) {
     override fun doWork(): Result {

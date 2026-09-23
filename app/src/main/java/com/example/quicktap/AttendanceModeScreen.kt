@@ -36,14 +36,17 @@ fun AttendanceModeScreen(
     val isCheckInPressed by checkInInteractionSource.collectIsPressedAsState()
     val isCheckOutPressed by checkOutInteractionSource.collectIsPressedAsState()
 
+    // Sokongan Bahasa Dinamik
     val currentLang = AppSettingsState.currentLanguage
-    val titleText = if (currentLang == "ms") "Attendance Mode" else "Attendance Mode"
-    val chooseModeText = if (currentLang == "ms") "Choose Mode Attendance" else "Choose Attendance Mode"
-    val checkInText = if (currentLang == "ms") "Check-in" else "Check-In"
-    val checkOutText = if (currentLang == "ms") "Check-out" else "Check-Out"
+    val titleText = if (currentLang == "ms") "Mod Kehadiran" else "Attendance Mode"
+    val chooseModeText = if (currentLang == "ms") "Pilih Mod Kehadiran" else "Choose Attendance Mode"
+    val checkInText = if (currentLang == "ms") "Daftar Masuk (Check-In)" else "Check-In"
+    val checkOutText = if (currentLang == "ms") "Daftar Keluar (Check-Out)" else "Check-Out"
 
-    val backgroundColor = if (AppSettingsState.isDarkMode) Color(0xFF121212) else Color.White
-    val textColor = if (AppSettingsState.isDarkMode) Color.White else Color.Black
+    // Sokongan Tema Gelap/Cerah
+    val isDark = AppSettingsState.isDarkMode
+    val backgroundColor = if (isDark) Color(0xFF121212) else Color(0xFFF9F9F9)
+    val textColor = if (isDark) Color.White else Color.Black
 
     LaunchedEffect(workshopId) {
         if (workshopId != "default_workshop") {
@@ -76,12 +79,10 @@ fun AttendanceModeScreen(
                 .fillMaxSize()
                 .background(backgroundColor)
                 .padding(paddingValues)
-                .padding(horizontal = 24.dp, vertical = 16.dp),
+                .padding(horizontal = 24.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.Start,
             verticalArrangement = Arrangement.Top
         ) {
-            Spacer(modifier = Modifier.height(16.dp))
-
             Text(
                 text = chooseModeText,
                 fontSize = 16.sp,
@@ -91,10 +92,11 @@ fun AttendanceModeScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
+            // Butang Check-In
             val targetCheckInColor: Color = when {
                 isCheckInPressed -> Color(0xFF1D62B4)
                 selectedMode == "Check-In" -> Color(0xFF4A90E2)
-                else -> if (AppSettingsState.isDarkMode) Color(0xFF2C2C2C) else Color(0xFFE0E0E0)
+                else -> if (isDark) Color(0xFF2C2C2C) else Color(0xFFE0E0E0)
             }
 
             val checkInButtonColor by animateColorAsState(
@@ -105,7 +107,7 @@ fun AttendanceModeScreen(
             Button(
                 onClick = {
                     selectedMode = "Check-In"
-                    setLiveAttendanceStatusInFirebase(context = context, workshopId = workshopId, mode = "Check-In")
+                    setAttendanceModeStatusInFirebase(context = context, workshopId = workshopId, mode = "Check-In")
                     onModeSelected("Check-In")
                 },
                 interactionSource = checkInInteractionSource,
@@ -121,7 +123,7 @@ fun AttendanceModeScreen(
             ) {
                 val checkInTextColor = when {
                     selectedMode == "Check-In" || isCheckInPressed -> Color.White
-                    AppSettingsState.isDarkMode -> Color.LightGray
+                    isDark -> Color.LightGray
                     else -> Color.Black
                 }
 
@@ -135,10 +137,11 @@ fun AttendanceModeScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
+            // Butang Check-Out
             val targetCheckOutColor: Color = when {
                 isCheckOutPressed -> Color(0xFF1D62B4)
                 selectedMode == "Check-Out" -> Color(0xFF4A90E2)
-                else -> if (AppSettingsState.isDarkMode) Color(0xFF2C2C2C) else Color(0xFFE0E0E0)
+                else -> if (isDark) Color(0xFF2C2C2C) else Color(0xFFE0E0E0)
             }
 
             val checkOutButtonColor by animateColorAsState(
@@ -149,7 +152,7 @@ fun AttendanceModeScreen(
             Button(
                 onClick = {
                     selectedMode = "Check-Out"
-                    setLiveAttendanceStatusInFirebase(context = context, workshopId = workshopId, mode = "Check-Out")
+                    setAttendanceModeStatusInFirebase(context = context, workshopId = workshopId, mode = "Check-Out")
                     onModeSelected("Check-Out")
                 },
                 interactionSource = checkOutInteractionSource,
@@ -165,7 +168,7 @@ fun AttendanceModeScreen(
             ) {
                 val checkOutTextColor = when {
                     selectedMode == "Check-Out" || isCheckOutPressed -> Color.White
-                    AppSettingsState.isDarkMode -> Color.LightGray
+                    isDark -> Color.LightGray
                     else -> Color.Black
                 }
 
@@ -180,7 +183,8 @@ fun AttendanceModeScreen(
     }
 }
 
-fun setLiveAttendanceStatusInFirebase(context: android.content.Context, workshopId: String, mode: String) {
+// Fungsi pembantu tunggal (Elak konflik pertindihan nama)
+fun setAttendanceModeStatusInFirebase(context: android.content.Context, workshopId: String, mode: String) {
     if (workshopId == "default_workshop") {
         Toast.makeText(context, "Attendance mode changed locally (Simulation)", Toast.LENGTH_SHORT).show()
         return
@@ -198,65 +202,5 @@ fun setLiveAttendanceStatusInFirebase(context: android.content.Context, workshop
         }
         .addOnFailureListener { e ->
             Toast.makeText(context, "Failed to update Firebase: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-}
-
-/**
- * Fungsi Pintar untuk Merekod Kehadiran Menggunakan Kad NFC (Card UID)
- * Dipanggil apabila peranti staf membaca UID kad fizikal pelajar.
- */
-fun processNfcCardTap(context: android.content.Context, workshopId: String, scannedCardUid: String) {
-    val firestore = FirebaseFirestore.getInstance()
-
-    // 1. Cari pemilik kad di koleksi 'users' berdasarkan cardUid yang didaftarkan dalam Edit Profile
-    firestore.collection("users")
-        .whereEqualTo("cardUid", scannedCardUid)
-        .get()
-        .addOnSuccessListener { userQuerySnapshot ->
-            if (!userQuerySnapshot.isEmpty) {
-                val userDoc = userQuerySnapshot.documents[0]
-                val realStudentId = userDoc.id
-                val realStudentName = userDoc.getString("name") ?: userDoc.getString("fullName") ?: "Student"
-                val studentNumber = userDoc.getString("studentId") ?: userDoc.getString("studentNumber") ?: "-"
-
-                val registrationDocId = "${workshopId}_$realStudentId"
-                val registrationRef = firestore.collection("registrations").document(registrationDocId)
-
-                // 2. Semak mod semasa bengkel (Check-In atau Check-Out)
-                firestore.collection("workshops").document(workshopId).get()
-                    .addOnSuccessListener { workshopDoc ->
-                        val attendanceMode = workshopDoc.getString("attendanceMode") ?: "Check-In"
-
-                        // 3. Kemas kini atau Cipta rekod kehadiran dengan Nama Sebenar Pelajar
-                        val updateData = mutableMapOf<String, Any>(
-                            "workshopId" to workshopId,
-                            "studentId" to realStudentId,
-                            "studentName" to realStudentName, // <--- Nama Sebenar Pelajar Masuk Sini!
-                            "studentNumber" to studentNumber,
-                            "status" to "PRESENT"
-                        )
-
-                        if (attendanceMode == "Check-Out") {
-                            updateData["checkOutTimestamp"] = FieldValue.serverTimestamp()
-                            updateData["timeout"] = FieldValue.serverTimestamp()
-                        } else {
-                            updateData["timestamp"] = FieldValue.serverTimestamp()
-                            updateData["checkInTimestamp"] = FieldValue.serverTimestamp()
-                        }
-
-                        registrationRef.set(updateData, com.google.firebase.firestore.SetOptions.merge())
-                            .addOnSuccessListener {
-                                Toast.makeText(context, "$attendanceMode Success: $realStudentName", Toast.LENGTH_LONG).show()
-                            }
-                            .addOnFailureListener { e ->
-                                Toast.makeText(context, "Failed to record: ${e.message}", Toast.LENGTH_SHORT).show()
-                            }
-                    }
-            } else {
-                Toast.makeText(context, "Kad NFC tidak berdaftar! Sila daftar kad di Edit Profile.", Toast.LENGTH_LONG).show()
-            }
-        }
-        .addOnFailureListener { e ->
-            Toast.makeText(context, "Ralat pangkalan data: ${e.message}", Toast.LENGTH_SHORT).show()
         }
 }

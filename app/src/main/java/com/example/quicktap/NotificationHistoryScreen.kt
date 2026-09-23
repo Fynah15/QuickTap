@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -24,8 +25,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
@@ -36,7 +35,8 @@ data class NotificationItem(
     val id: String,
     val title: String,
     val message: String,
-    val timestamp: Long
+    val timestamp: Long,
+    val workshopId: String? = null
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -49,16 +49,18 @@ fun NotificationHistoryScreen(onBackClick: () -> Unit) {
 
     var notifications by remember { mutableStateOf<List<NotificationItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
-
-    val currentLang = AppSettingsState.currentLanguage
-    val titleText = if (currentLang == "ms") "Sejarah Notifikasi" else "Notification History"
-    val noNotifText = if (currentLang == "ms") "Tiada notifikasi buat masa ini." else "No notifications at the moment."
+    var errorMessage by remember { mutableStateOf<String?>(null) }
 
     val isDark = AppSettingsState.isDarkMode
     val backgroundColor = if (isDark) Color(0xFF121212) else Color(0xFFF9F9F9)
     val cardColor = if (isDark) Color(0xFF1E1E1E) else Color.White
     val textColor = if (isDark) Color.White else Color.Black
     val secondaryTextColor = if (isDark) Color.LightGray else Color.Gray
+
+    val currentLang = AppSettingsState.currentLanguage
+    val titleText = if (currentLang == "ms") "Sejarah Notifikasi" else "Notification History"
+    val noNotifText = if (currentLang == "ms") "Tiada notifikasi untuk bengkel yang didaftarkan." else "No notifications for registered workshops."
+    val errorPrefix = if (currentLang == "ms") "Gagal memuatkan data: " else "Failed to load data: "
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -71,182 +73,112 @@ fun NotificationHistoryScreen(onBackClick: () -> Unit) {
         createNotificationChannel(context)
     }
 
-    // Helper function to fire local push alerts safely
-    fun showLocalNotification(title: String, message: String) {
-        val builder = NotificationCompat.Builder(context, "QUICKTAP_CHANNEL_ID")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle(title)
-            .setContentText(message)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true)
-
-        with(NotificationManagerCompat.from(context)) {
-            try {
-                notify(System.currentTimeMillis().toInt(), builder.build())
-            } catch (e: SecurityException) {
-                // Permission not granted for notifications
-            }
-        }
-    }
-
-    // Load data with robust snapshot tracking for local popups
+    // Real-time listener untuk menapis notifikasi berdasarkan bengkel yang student telah register
     LaunchedEffect(currentUser) {
-        val uid = currentUser?.uid
-        if (uid != null) {
-            // Listen to user-specific subcollection
-            firestore.collection("users").document(uid).collection("notifications")
-                .orderBy("timestamp", Query.Direction.DESCENDING)
-                .addSnapshotListener { snapshot, error ->
-                    if (error != null) {
-                        isLoading = false
-                        return@addSnapshotListener
-                    }
+        val uid = currentUser?.uid ?: return@LaunchedEffect
 
-                    if (snapshot != null && !snapshot.isEmpty) {
-                        val newNotifications = snapshot.documents.map { doc ->
-                            NotificationItem(
-                                id = doc.id,
-                                title = doc.getString("title") ?: "Notification",
-                                message = doc.getString("message") ?: "",
-                                timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
-                            )
-                        }
-
-                        // Check document modifications to trigger popup for newly added items
-                        snapshot.documentChanges.forEach { change ->
-                            if (change.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
-                                val doc = change.document
-                                val title = doc.getString("title") ?: "Notification"
-                                val message = doc.getString("message") ?: ""
-                                val timestamp = doc.getLong("timestamp") ?: 0L
-
-                                // Only trigger if the notification is recent (e.g., created within the last 10 seconds)
-                                // This prevents popping up old history items when the screen first loads.
-                                if (System.currentTimeMillis() - timestamp < 10000) {
-                                    showLocalNotification(title, message)
-                                }
-                            }
-                        }
-
-                        notifications = newNotifications
-                        isLoading = false
-                    } else {
-                        // Fallback to global notifications if user subcollection is empty
-                        firestore.collection("notifications")
-                            .orderBy("timestamp", Query.Direction.DESCENDING)
-                            .addSnapshotListener { globalSnapshot, globalError ->
-                                if (globalError != null) {
-                                    isLoading = false
-                                    return@addSnapshotListener
-                                }
-
-                                if (globalSnapshot != null) {
-                                    globalSnapshot.documentChanges.forEach { change ->
-                                        if (change.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
-                                            val doc = change.document
-                                            val title = doc.getString("title") ?: "Notification"
-                                            val message = doc.getString("message") ?: ""
-                                            val timestamp = doc.getLong("timestamp") ?: 0L
-
-                                            if (System.currentTimeMillis() - timestamp < 10000) {
-                                                showLocalNotification(title, message)
-                                            }
-                                        }
-                                    }
-
-                                    notifications = globalSnapshot.documents.map { doc ->
-                                        NotificationItem(
-                                            id = doc.id,
-                                            title = doc.getString("title") ?: "Notification",
-                                            message = doc.getString("message") ?: "",
-                                            timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
-                                        )
-                                    }
-                                }
-                                isLoading = false
-                            }
-                    }
+        // Langkah 1: Dapatkan senarai ID bengkel yang telah didaftar oleh student ini dari koleksi "registrations"
+        firestore.collection("registrations")
+            .whereEqualTo("userId", uid)
+            .addSnapshotListener { regSnapshot, regError ->
+                if (regError != null) {
+                    Log.e("FirestoreError", "Failed to listen registrations.", regError)
+                    errorMessage = "$errorPrefix${regError.message}"
+                    isLoading = false
+                    return@addSnapshotListener
                 }
-        } else {
-            isLoading = false
-        }
+
+                val registeredWorkshopIds = regSnapshot?.documents?.mapNotNull {
+                    it.getString("workshopId")
+                }?.toSet() ?: emptySet()
+
+                // Langkah 2: Dengar koleksi notifikasi secara real-time
+                firestore.collection("users").document(uid).collection("notifications")
+                    .orderBy("timestamp", Query.Direction.DESCENDING)
+                    .addSnapshotListener { notifSnapshot, notifError ->
+                        if (notifError != null) {
+                            Log.e("FirestoreError", "Listen failed for notifications.", notifError)
+                            errorMessage = "$errorPrefix${notifError.message}"
+                            isLoading = false
+                            return@addSnapshotListener
+                        }
+
+                        if (notifSnapshot != null) {
+                            val list = notifSnapshot.documents.mapNotNull { doc ->
+                                try {
+                                    val wsId = doc.getString("workshopId")
+                                    // Tapis: Hanya ambil notifikasi umum (tiada workshopId) ATAU notifikasi untuk bengkel yang student dah register
+                                    if (wsId != null && wsId.isNotEmpty() && !registeredWorkshopIds.contains(wsId)) {
+                                        return@mapNotNull null
+                                    }
+
+                                    NotificationItem(
+                                        id = doc.id,
+                                        title = doc.getString("title") ?: if (currentLang == "ms") "Tiada Tajuk" else "No Title",
+                                        message = doc.getString("message") ?: if (currentLang == "ms") "Tiada mesej" else "No message",
+                                        timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis(),
+                                        workshopId = wsId
+                                    )
+                                } catch (e: Exception) {
+                                    null
+                                }
+                            }
+                            notifications = list
+                            isLoading = false
+                            Log.d("FirestoreData", "Filtered notifications loaded: ${list.size}")
+                        }
+                    }
+            }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(titleText, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                title = { Text(titleText, color = Color.White) },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF912323))
             )
         }
     ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(backgroundColor)
-                .padding(paddingValues)
-        ) {
-            if (isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.Center),
-                    color = Color(0xFF912323)
-                )
-            } else if (notifications.isEmpty()) {
-                Text(
-                    text = noNotifText,
-                    modifier = Modifier.align(Alignment.Center),
-                    color = secondaryTextColor,
-                    fontSize = 14.sp
-                )
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(notifications, key = { it.id }) { item ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = cardColor),
-                            shape = RoundedCornerShape(8.dp),
-                            elevation = CardDefaults.cardElevation(2.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
+        Box(modifier = Modifier.fillMaxSize().background(backgroundColor).padding(paddingValues)) {
+            when {
+                isLoading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Color(0xFF912323))
+                errorMessage != null -> Text(errorMessage!!, modifier = Modifier.align(Alignment.Center), color = Color.Red)
+                notifications.isEmpty() -> Text(noNotifText, modifier = Modifier.align(Alignment.Center), color = secondaryTextColor)
+                else -> {
+                    LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(notifications, key = { it.id }) { item ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = cardColor),
+                                shape = RoundedCornerShape(8.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Notifications,
-                                    contentDescription = null,
-                                    tint = Color(0xFF912323),
-                                    modifier = Modifier.size(24.dp)
-                                )
-                                Spacer(modifier = Modifier.width(16.dp))
-                                Column {
-                                    Text(
-                                        text = item.title,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 15.sp,
-                                        color = textColor
+                                Row(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Notifications,
+                                        contentDescription = null,
+                                        tint = Color(0xFF912323),
+                                        modifier = Modifier.size(24.dp)
                                     )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = item.message,
-                                        fontSize = 13.sp,
-                                        color = secondaryTextColor
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date(item.timestamp)),
-                                        fontSize = 11.sp,
-                                        color = secondaryTextColor.copy(alpha = 0.7f)
-                                    )
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Column {
+                                        Text(item.title, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = textColor)
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(item.message, fontSize = 13.sp, color = secondaryTextColor)
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date(item.timestamp)),
+                                            fontSize = 11.sp,
+                                            color = secondaryTextColor.copy(alpha = 0.7f)
+                                        )
+                                    }
                                 }
                             }
                         }

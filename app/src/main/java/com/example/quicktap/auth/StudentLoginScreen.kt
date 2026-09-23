@@ -3,6 +3,7 @@ package com.example.quicktap.auth
 import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -24,36 +25,42 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 import com.example.quicktap.R
+import com.example.quicktap.AppSettingsState
 
 @Composable
 fun StudentLoginScreen(
     onNavigateHome: () -> Unit,
     onSignUp: () -> Unit,
+    onForgotPasswordClick: () -> Unit
 ) {
-    val auth = FirebaseAuth.getInstance()
+    val auth = remember { FirebaseAuth.getInstance() }
+    val firestore = remember { FirebaseFirestore.getInstance() }
     val context = LocalContext.current
 
-    var studentId by remember { mutableStateOf("") }
+    var emailInput by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var isPasswordVisible by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
+
+    val currentLang = AppSettingsState.currentLanguage
+    val forgotPasswordText = if (currentLang == "ms") "Lupa Kata Laluan?" else "Forgot Password?"
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF912323)),
-        contentAlignment = Alignment.Center // Mengunci keseluruhan kandungan tepat di tengah skrin
+        contentAlignment = Alignment.Center
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .imePadding() // Mengelakkan papan kekunci menindih kandungan
+                .imePadding()
                 .padding(horizontal = 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // --- LOGO QUICKTAP (Di tengah) ---
             Image(
                 painter = painterResource(id = R.drawable.quicktap_logo),
                 contentDescription = "QuickTap Logo",
@@ -63,9 +70,9 @@ fun StudentLoginScreen(
             Spacer(modifier = Modifier.height(30.dp))
 
             OutlinedTextField(
-                value = studentId,
-                onValueChange = { studentId = it },
-                label = { Text("Student ID", fontSize = 15.sp) },
+                value = emailInput,
+                onValueChange = { emailInput = it },
+                label = { Text("Email Address", fontSize = 15.sp) },
                 textStyle = TextStyle(fontSize = 16.sp, color = Color.Black),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedContainerColor = Color.White,
@@ -105,42 +112,38 @@ fun StudentLoginScreen(
                 shape = RoundedCornerShape(8.dp)
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Text(
+                    text = forgotPasswordText,
+                    color = Color.White,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp,
+                    modifier = Modifier.clickable { onForgotPasswordClick() }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
 
             Button(
                 onClick = {
-                    val inputId = studentId.trim()
+                    val email = emailInput.trim()
                     val cleanPassword = password.trim()
 
-                    if (inputId.isEmpty() || cleanPassword.isEmpty()) {
+                    if (email.isEmpty() || cleanPassword.isEmpty()) {
                         Toast.makeText(context, "Please fill in all fields", Toast.LENGTH_SHORT).show()
                         return@Button
                     }
 
                     isLoading = true
 
-                    val cleanStudentId = if (inputId.contains("@")) {
-                        inputId.substringBefore("@")
-                    } else {
-                        inputId
+                    // Terus lakukan log masuk menggunakan Firebase Auth dengan e-mel
+                    performLoginAndCheckFirestore(auth, firestore, email, cleanPassword, context, onNavigateHome) {
+                        isLoading = false
                     }
-
-                    val studentEmail = "${cleanStudentId.trim()}@student-city.edu.my".lowercase()
-
-                    auth.signInWithEmailAndPassword(studentEmail, cleanPassword)
-                        .addOnCompleteListener { task ->
-                            isLoading = false
-                            if (task.isSuccessful) {
-                                Toast.makeText(context, "Login Successful!", Toast.LENGTH_SHORT).show()
-                                onNavigateHome()
-                            } else {
-                                Toast.makeText(
-                                    context,
-                                    "Login Failed: ${task.exception?.localizedMessage}",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A90E2)),
                 modifier = Modifier
@@ -163,9 +166,7 @@ fun StudentLoginScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Button(
-                onClick = {
-                    onSignUp()
-                },
+                onClick = { onSignUp() },
                 colors = ButtonDefaults.textButtonColors(),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -173,4 +174,49 @@ fun StudentLoginScreen(
             }
         }
     }
+}
+
+private fun performLoginAndCheckFirestore(
+    auth: FirebaseAuth,
+    firestore: FirebaseFirestore,
+    email: String,
+    pass: String,
+    context: android.content.Context,
+    onSuccess: () -> Unit,
+    onFinished: () -> Unit
+) {
+    auth.signInWithEmailAndPassword(email, pass)
+        .addOnCompleteListener { task ->
+            if (task.isSuccessful) {
+                val uid = auth.currentUser?.uid
+                if (uid != null) {
+                    firestore.collection("users").document(uid).get()
+                        .addOnSuccessListener { document ->
+                            onFinished()
+                            if (document.exists()) {
+                                Toast.makeText(context, "Login Successful!", Toast.LENGTH_SHORT).show()
+                                onSuccess()
+                            } else {
+                                auth.signOut()
+                                Toast.makeText(context, "Account not registered in database. Please Sign Up.", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                        .addOnFailureListener {
+                            onFinished()
+                            auth.signOut()
+                            Toast.makeText(context, "Error checking profile: ${it.message}", Toast.LENGTH_LONG).show()
+                        }
+                } else {
+                    onFinished()
+                    Toast.makeText(context, "Login Failed: Invalid user session.", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                onFinished()
+                Toast.makeText(
+                    context,
+                    "Login Failed: ${task.exception?.localizedMessage}",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
 }

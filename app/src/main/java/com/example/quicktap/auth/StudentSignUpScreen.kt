@@ -6,15 +6,19 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -31,16 +35,21 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
-fun StudentSignUpScreen(onNavigateToHome: () -> Unit) {
-    val auth = FirebaseAuth.getInstance()
-    val firestore = FirebaseFirestore.getInstance()
+fun StudentSignUpScreen(
+    onNavigateToHome: () -> Unit,
+    onBackToLogin: () -> Unit
+) {
+    val auth = remember { FirebaseAuth.getInstance() }
+    val firestore = remember { FirebaseFirestore.getInstance() }
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
     var fullName by remember { mutableStateOf("") }
     var nickname by remember { mutableStateOf("") }
     var studentId by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
     var course by remember { mutableStateOf("") }
+    var phoneNumber by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
@@ -136,12 +145,56 @@ fun StudentSignUpScreen(onNavigateToHome: () -> Unit) {
 
             Spacer(modifier = Modifier.height(14.dp))
 
+            // Personal Email Input
+            OutlinedTextField(
+                value = email,
+                onValueChange = { email = it },
+                label = { Text("Personal Email", fontSize = 15.sp) },
+                textStyle = TextStyle(fontSize = 16.sp, color = Color.Black),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Color.White,
+                    unfocusedContainerColor = Color.White,
+                    disabledContainerColor = Color.White,
+                    focusedLabelColor = Color.White,
+                    unfocusedLabelColor = Color.DarkGray,
+                    focusedBorderColor = Color.White,
+                    unfocusedBorderColor = Color.LightGray
+                ),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp)
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
             // Course Input
             OutlinedTextField(
                 value = course,
                 onValueChange = { course = it },
                 label = { Text("Course", fontSize = 15.sp) },
                 textStyle = TextStyle(fontSize = 16.sp, color = Color.Black),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Color.White,
+                    unfocusedContainerColor = Color.White,
+                    disabledContainerColor = Color.White,
+                    focusedLabelColor = Color.White,
+                    unfocusedLabelColor = Color.DarkGray,
+                    focusedBorderColor = Color.White,
+                    unfocusedBorderColor = Color.LightGray
+                ),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp)
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Phone Number Input
+            OutlinedTextField(
+                value = phoneNumber,
+                onValueChange = { phoneNumber = it },
+                label = { Text("Phone Number (+60...)", fontSize = 15.sp) },
+                textStyle = TextStyle(fontSize = 16.sp, color = Color.Black),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedContainerColor = Color.White,
                     unfocusedContainerColor = Color.White,
@@ -218,12 +271,19 @@ fun StudentSignUpScreen(onNavigateToHome: () -> Unit) {
                     val nameInput = fullName.trim()
                     val nickInput = nickname.trim().ifEmpty { nameInput.substringBefore(" ") }
                     val inputId = studentId.trim()
+                    val emailInput = email.trim().lowercase()
                     val courseInput = course.trim()
+                    val phoneInput = phoneNumber.trim()
                     val cleanPassword = password.trim()
                     val cleanConfirmPassword = confirmPassword.trim()
 
-                    if (nameInput.isEmpty() || inputId.isEmpty() || courseInput.isEmpty() || cleanPassword.isEmpty() || cleanConfirmPassword.isEmpty()) {
+                    if (nameInput.isEmpty() || inputId.isEmpty() || emailInput.isEmpty() || courseInput.isEmpty() || phoneInput.isEmpty() || cleanPassword.isEmpty() || cleanConfirmPassword.isEmpty()) {
                         Toast.makeText(context, "Please complete all fields", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+
+                    if (!emailInput.contains("@") || !emailInput.contains(".")) {
+                        Toast.makeText(context, "Please enter a valid email address", Toast.LENGTH_SHORT).show()
                         return@Button
                     }
 
@@ -239,9 +299,11 @@ fun StudentSignUpScreen(onNavigateToHome: () -> Unit) {
 
                     isLoading = true
                     val cleanStudentId = if (inputId.contains("@")) inputId.substringBefore("@") else inputId
-                    val studentEmail = "$cleanStudentId@student-city.edu.my".lowercase()
 
-                    auth.createUserWithEmailAndPassword(studentEmail, cleanPassword)
+                    // Pastikan e-mel log masuk konsisten (jika pengguna taip ID semata-mata, bina e-mel kampus sebagai fallback auth)
+                    val authEmail = if (emailInput.isNotEmpty()) emailInput else "$cleanStudentId@student.city.edu.my".lowercase()
+
+                    auth.createUserWithEmailAndPassword(authEmail, cleanPassword)
                         .addOnCompleteListener { task ->
                             if (task.isSuccessful) {
                                 val firebaseUser = auth.currentUser
@@ -253,9 +315,11 @@ fun StudentSignUpScreen(onNavigateToHome: () -> Unit) {
                                     "name" to nameInput,
                                     "fullName" to nameInput,
                                     "nickname" to nickInput,
-                                    "email" to studentEmail,
+                                    "email" to authEmail,
+                                    "personalEmail" to emailInput,
                                     "course" to courseInput,
                                     "program" to courseInput,
+                                    "phone" to phoneInput,
                                     "role" to "student",
                                     "nfcUid" to "",
                                     "cardUid" to ""
@@ -272,7 +336,6 @@ fun StudentSignUpScreen(onNavigateToHome: () -> Unit) {
                                     .addOnSuccessListener {
                                         isLoading = false
                                         Toast.makeText(context, "Account Created Successfully!", Toast.LENGTH_SHORT).show()
-                                        // Immediately navigate to Home Dashboard upon successful signup
                                         onNavigateToHome()
                                     }
                                     .addOnFailureListener { e ->
@@ -325,7 +388,7 @@ fun StudentSignUpScreen(onNavigateToHome: () -> Unit) {
 
             Button(
                 onClick = {
-                    onNavigateToHome()
+                    onBackToLogin()
                 },
                 colors = ButtonDefaults.textButtonColors(),
                 modifier = Modifier.fillMaxWidth()

@@ -3,11 +3,10 @@ package com.example.quicktap
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
@@ -19,8 +18,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.quicktap.AppSettingsState
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -36,29 +35,73 @@ data class Workshop(
 
 enum class FilterType { TODAY, THIS_WEEK, UPCOMING, PAST, ALL }
 
-// Helper function to determine if a workshop date has passed
-private fun isWorkshopPastDate(dateStr: String): Boolean {
-    val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply { isLenient = false }
-    val flexibleSdf = SimpleDateFormat("yyyy-M-d", Locale.getDefault()).apply { isLenient = false }
-    val altSdf = SimpleDateFormat("d/M/yyyy", Locale.getDefault()).apply { isLenient = false }
+private fun parseStaffDate(dateStr: String): Date? {
+    if (dateStr.isBlank()) return null
+    val cleaned = dateStr.replace(Regex("(?i)^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\\s*"), "").trim()
 
-    val parsedDate = try {
-        sdf.parse(dateStr) ?: flexibleSdf.parse(dateStr) ?: altSdf.parse(dateStr)
-    } catch (_: Exception) {
-        null
-    } ?: return false
+    val formats = listOf(
+        SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH),
+        SimpleDateFormat("yyyy-M-d", Locale.ENGLISH),
+        SimpleDateFormat("dd/MM/yyyy", Locale.ENGLISH),
+        SimpleDateFormat("d/M/yyyy", Locale.ENGLISH),
+        SimpleDateFormat("MM/dd/yyyy", Locale.ENGLISH),
+        SimpleDateFormat("yyyy/MM/dd", Locale.ENGLISH),
+        SimpleDateFormat("MMMM d, yyyy", Locale.ENGLISH),
+        SimpleDateFormat("d MMMM yyyy", Locale.ENGLISH),
+        SimpleDateFormat("dd MMM yyyy", Locale.ENGLISH)
+    )
 
-    val todayCal = Calendar.getInstance().apply {
+    for (f in formats) {
+        f.isLenient = true
+        try {
+            val parsed = f.parse(cleaned)
+            if (parsed != null) return parsed
+        } catch (_: Exception) { }
+    }
+    return null
+}
+
+private fun parseStaffWorkshopDateTime(dateStr: String, timeStr: String): Date? {
+    val baseDate = parseStaffDate(dateStr) ?: return null
+    if (timeStr.isBlank()) return baseDate
+
+    val timeCleaned = timeStr.trim().uppercase(Locale.ENGLISH)
+    val timeFormats = listOf(
+        SimpleDateFormat("yyyy-MM-dd hh:mm a", Locale.ENGLISH),
+        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ENGLISH),
+        SimpleDateFormat("dd/MM/yyyy hh:mm a", Locale.ENGLISH),
+        SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.ENGLISH)
+    )
+
+    val dateOnlyStr = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).format(baseDate)
+    val combinedStr = "$dateOnlyStr $timeCleaned"
+
+    for (f in timeFormats) {
+        f.isLenient = true
+        try {
+            val parsed = f.parse(combinedStr)
+            if (parsed != null) return parsed
+        } catch (_: Exception) { }
+    }
+    return baseDate
+}
+
+private fun stripStaffTime(date: Date): Date {
+    val cal = Calendar.getInstance().apply {
+        time = date
         set(Calendar.HOUR_OF_DAY, 0)
         set(Calendar.MINUTE, 0)
         set(Calendar.SECOND, 0)
         set(Calendar.MILLISECOND, 0)
     }
-
-    return parsedDate.before(todayCal.time)
+    return cal.time
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+private fun isWorkshopPastDate(dateStr: String, timeStr: String): Boolean {
+    val fullDateTime = parseStaffWorkshopDateTime(dateStr, timeStr) ?: parseStaffDate(dateStr) ?: return false
+    return fullDateTime.before(Date())
+}
+
 @Composable
 fun StaffWorkshopListScreen(
     onBackClick: () -> Unit,
@@ -75,7 +118,6 @@ fun StaffWorkshopListScreen(
     var isLoading by remember { mutableStateOf(true) }
 
     val currentLang = AppSettingsState.currentLanguage
-    val workshopListTitle = if (currentLang == "ms") "Senarai Bengkel" else "Workshop List"
     val createNewBtnText = if (currentLang == "ms") "+ Cipta Bengkel Baru" else "+ Create New Workshop"
 
     val allFilterText = if (currentLang == "ms") "Semua" else "All"
@@ -97,10 +139,6 @@ fun StaffWorkshopListScreen(
     val secondaryTextColor = if (isDark) Color.LightGray else Color.Gray
 
     LaunchedEffect(Unit) {
-        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val flexibleSdf = SimpleDateFormat("yyyy-M-d", Locale.getDefault())
-        val altSdf = SimpleDateFormat("d/M/yyyy", Locale.getDefault())
-
         firestore.collection("workshops")
             .addSnapshotListener { snapshot, e ->
                 isLoading = false
@@ -123,11 +161,7 @@ fun StaffWorkshopListScreen(
                     }
 
                     val sortedList = list.sortedByDescending { w ->
-                        try {
-                            sdf.parse(w.date) ?: flexibleSdf.parse(w.date) ?: altSdf.parse(w.date) ?: Date(0)
-                        } catch (_: Exception) {
-                            Date(0)
-                        }
+                        parseStaffDate(w.date)?.time ?: 0L
                     }
 
                     allWorkshops = sortedList
@@ -136,150 +170,171 @@ fun StaffWorkshopListScreen(
     }
 
     LaunchedEffect(allWorkshops, currentFilter) {
-        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val flexibleSdf = SimpleDateFormat("yyyy-M-d", Locale.getDefault())
-        val altSdf = SimpleDateFormat("d/M/yyyy", Locale.getDefault())
+        val today = Date()
+        val todayStripped = stripStaffTime(today)
 
-        val todayCal = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
+        val cal = Calendar.getInstance().apply {
+            time = todayStripped
+            firstDayOfWeek = Calendar.MONDAY
+            set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
         }
-        val todayDate = todayCal.time
+        val startOfWeek = cal.time
+        cal.add(Calendar.DAY_OF_YEAR, 6)
+        val endOfWeek = cal.time
 
         filteredWorkshops = when (currentFilter) {
             FilterType.ALL -> allWorkshops
             FilterType.TODAY -> {
                 allWorkshops.filter {
-                    val wDate = try { sdf.parse(it.date) } catch (_: Exception) { try { flexibleSdf.parse(it.date) } catch (_: Exception) { altSdf.parse(it.date) } }
-                    wDate != null && sdf.format(wDate) == sdf.format(todayDate)
+                    parseStaffDate(it.date)?.let { d ->
+                        stripStaffTime(d).time == todayStripped.time && !isWorkshopPastDate(it.date, it.time)
+                    } ?: false
                 }
             }
             FilterType.THIS_WEEK -> {
-                val endOfWeekCal = Calendar.getInstance().apply {
-                    time = todayDate
-                    add(Calendar.DAY_OF_YEAR, 7)
-                }
                 allWorkshops.filter {
-                    val wDate = try { sdf.parse(it.date) } catch (_: Exception) { try { flexibleSdf.parse(it.date) } catch (_: Exception) { altSdf.parse(it.date) } }
-                    wDate != null && (wDate == todayDate || wDate.after(todayDate)) && wDate.before(endOfWeekCal.time)
+                    val fullDt = parseStaffWorkshopDateTime(it.date, it.time) ?: parseStaffDate(it.date)
+                    if (fullDt == null || fullDt.before(today)) false
+                    else {
+                        val wDateStripped = stripStaffTime(fullDt)
+                        wDateStripped.time >= startOfWeek.time && wDateStripped.time <= endOfWeek.time
+                    }
                 }
             }
             FilterType.UPCOMING -> {
                 allWorkshops.filter {
-                    val wDate = try { sdf.parse(it.date) } catch (_: Exception) { try { flexibleSdf.parse(it.date) } catch (_: Exception) { altSdf.parse(it.date) } }
-                    wDate != null && wDate.after(todayDate)
+                    val fullDt = parseStaffWorkshopDateTime(it.date, it.time) ?: parseStaffDate(it.date)
+                    fullDt != null && fullDt.after(today)
                 }
             }
             FilterType.PAST -> {
-                allWorkshops.filter { isWorkshopPastDate(it.date) }
+                allWorkshops.filter { isWorkshopPastDate(it.date, it.time) }
             }
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(workshopListTitle, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White) },
-                navigationIcon = { IconButton(onClick = onBackClick) { Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White) } },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF912323), titleContentColor = Color.White)
-            )
-        }
-    ) { paddingValues ->
-        Box(
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(backgroundColor)
+    ) {
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(backgroundColor)
-                .padding(paddingValues)
+                .padding(horizontal = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (isLoading) {
-                CircularProgressIndicator(
-                    color = Color(0xFF912323),
-                    modifier = Modifier.align(Alignment.Center)
+            // Fixed Top Section: Create Button (pushed down slightly) & Filter Buttons
+            Spacer(modifier = Modifier.height(40.dp))
+
+            OutlinedButton(
+                onClick = onCreateNewClick,
+                modifier = Modifier.fillMaxWidth().height(40.dp),
+                shape = RoundedCornerShape(4.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = if (isDark) Color(0xFF1E1E1E) else Color.Transparent,
+                    contentColor = textColor
                 )
+            ) {
+                Text(createNewBtnText, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                FilterButton(allFilterText, isActive = currentFilter == FilterType.ALL, isDark = isDark, modifier = Modifier.weight(1f)) { currentFilter = FilterType.ALL }
+                FilterButton(todayFilterText, isActive = currentFilter == FilterType.TODAY, isDark = isDark, modifier = Modifier.weight(1f)) { currentFilter = FilterType.TODAY }
+                FilterButton(thisWeekFilterText, isActive = currentFilter == FilterType.THIS_WEEK, isDark = isDark, modifier = Modifier.weight(1.1f)) { currentFilter = FilterType.THIS_WEEK }
+                FilterButton(upcomingFilterText, isActive = currentFilter == FilterType.UPCOMING, isDark = isDark, modifier = Modifier.weight(1.1f)) { currentFilter = FilterType.UPCOMING }
+                FilterButton(pastFilterText, isActive = currentFilter == FilterType.PAST, isDark = isDark, modifier = Modifier.weight(1f)) { currentFilter = FilterType.PAST }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Scrollable Content Section: Only the list cards scroll
+            if (isLoading) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Color(0xFF912323))
+                }
+            } else if (filteredWorkshops.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = emptyWorkshopText,
+                        color = secondaryTextColor,
+                        fontSize = 14.sp
+                    )
+                }
             } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                        .verticalScroll(rememberScrollState()),
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    contentPadding = PaddingValues(bottom = 24.dp)
                 ) {
+                    items(filteredWorkshops) { workshop ->
+                        val bannerColor = Color(0xFF1F619E)
+                        val isPastEvent = isWorkshopPastDate(workshop.date, workshop.time)
 
-                    OutlinedButton(
-                        onClick = onCreateNewClick,
-                        modifier = Modifier.fillMaxWidth().height(40.dp),
-                        shape = RoundedCornerShape(4.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = if (isDark) Color(0xFF1E1E1E) else Color.Transparent,
-                            contentColor = textColor
+                        WorkshopItemCard(
+                            title = workshop.title,
+                            subtitle = workshop.description,
+                            date = workshop.date,
+                            time = workshop.time,
+                            location = workshop.location,
+                            regCount = workshop.registeredCount,
+                            bannerColor = bannerColor,
+                            cardBgColor = cardBgColor,
+                            textColor = textColor,
+                            secondaryTextColor = secondaryTextColor,
+                            viewAttendanceText = viewAttendanceText,
+                            isPastEvent = isPastEvent,
+                            onEditClick = { onEditExistingClick(workshop.id) },
+                            onDeleteClick = {
+                                firestore.collection("workshops").document(workshop.id)
+                                    .delete()
+                                    .addOnSuccessListener {
+                                        Toast.makeText(context, deleteSuccessText, Toast.LENGTH_SHORT).show()
+                                    }
+                                    .addOnFailureListener { e ->
+                                        Toast.makeText(context, "$deleteFailedText${e.message}", Toast.LENGTH_SHORT).show()
+                                    }
+                            },
+                            onViewAttendanceClick = { onViewLiveAttendanceClick(workshop.id) }
                         )
-                    ) {
-                        Text(createNewBtnText, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        FilterButton(allFilterText, isActive = currentFilter == FilterType.ALL, isDark = isDark, modifier = Modifier.weight(1f)) { currentFilter = FilterType.ALL }
-                        FilterButton(todayFilterText, isActive = currentFilter == FilterType.TODAY, isDark = isDark, modifier = Modifier.weight(1f)) { currentFilter = FilterType.TODAY }
-                        FilterButton(thisWeekFilterText, isActive = currentFilter == FilterType.THIS_WEEK, isDark = isDark, modifier = Modifier.weight(1.1f)) { currentFilter = FilterType.THIS_WEEK }
-                        FilterButton(upcomingFilterText, isActive = currentFilter == FilterType.UPCOMING, isDark = isDark, modifier = Modifier.weight(1.1f)) { currentFilter = FilterType.UPCOMING }
-                        FilterButton(pastFilterText, isActive = currentFilter == FilterType.PAST, isDark = isDark, modifier = Modifier.weight(1f)) { currentFilter = FilterType.PAST }
-                    }
-
-                    if (filteredWorkshops.isEmpty()) {
-                        Text(
-                            text = emptyWorkshopText,
-                            color = secondaryTextColor,
-                            fontSize = 14.sp,
-                            modifier = Modifier.padding(top = 32.dp).align(Alignment.CenterHorizontally)
-                        )
-                    } else {
-                        filteredWorkshops.forEach { workshop ->
-                            val bannerColor = when (workshop.title.lowercase()) {
-                                "python", "python programming" -> Color(0xFF0D1B2A)
-                                "firebase", "firebase workshop" -> Color(0xFF3E5075)
-                                else -> Color(0xFF1F619E)
-                            }
-
-                            val isPastEvent = isWorkshopPastDate(workshop.date)
-
-                            WorkshopItemCard(
-                                title = workshop.title,
-                                subtitle = workshop.description,
-                                date = workshop.date,
-                                time = workshop.time,
-                                location = workshop.location,
-                                regCount = workshop.registeredCount,
-                                bannerColor = bannerColor,
-                                cardBgColor = cardBgColor,
-                                textColor = textColor,
-                                secondaryTextColor = secondaryTextColor,
-                                viewAttendanceText = viewAttendanceText,
-                                isPastEvent = isPastEvent,
-                                onEditClick = { onEditExistingClick(workshop.id) },
-                                onDeleteClick = {
-                                    firestore.collection("workshops").document(workshop.id)
-                                        .delete()
-                                        .addOnSuccessListener {
-                                            Toast.makeText(context, deleteSuccessText, Toast.LENGTH_SHORT).show()
-                                        }
-                                        .addOnFailureListener { e ->
-                                            Toast.makeText(context, "$deleteFailedText${e.message}", Toast.LENGTH_SHORT).show()
-                                        }
-                                },
-                                onViewAttendanceClick = { onViewLiveAttendanceClick(workshop.id) }
-                            )
-                        }
                     }
                 }
             }
         }
     }
+}
+
+fun registerStudentForWorkshop(
+    workshopId: String,
+    studentId: String,
+    studentName: String,
+    studentNumber: String,
+    onSuccess: () -> Unit,
+    onError: (String) -> Unit
+) {
+    val firestore = FirebaseFirestore.getInstance()
+    val registrationId = "${workshopId}_$studentId"
+
+    val registrationData = mapOf(
+        "workshopId" to workshopId,
+        "studentId" to studentId,
+        "fullName" to studentName,
+        "name" to studentName,
+        "studentNumber" to studentNumber,
+        "status" to "REGISTERED"
+    )
+
+    firestore.collection("registrations")
+        .document(registrationId)
+        .set(registrationData, SetOptions.merge())
+        .addOnSuccessListener { onSuccess() }
+        .addOnFailureListener { e -> onError(e.message ?: "Unknown error") }
 }
 
 @Composable

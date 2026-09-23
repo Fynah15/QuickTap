@@ -9,7 +9,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
@@ -29,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import com.example.quicktap.AppSettingsState
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 import com.example.quicktap.utils.scheduleWorkshopReminders
 import com.example.quicktap.utils.cancelWorkshopReminders
 import java.text.SimpleDateFormat
@@ -59,8 +59,9 @@ fun WorkshopListScreen(
 ) {
     val context = LocalContext.current
     val firestore = FirebaseFirestore.getInstance()
+
     val authUser = FirebaseAuth.getInstance().currentUser
-    val currentUserId = authUser?.uid ?: "STUDENT_12345"
+    val currentUserId = authUser?.uid
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf("All") }
@@ -95,6 +96,7 @@ fun WorkshopListScreen(
     val unregisterMsg = if (currentLang == "ms") "Pendaftaran dibatalkan." else "Registration cancelled."
     val fullMsg = if (currentLang == "ms") "Bengkel sudah penuh!" else "Workshop is full!"
     val pastEventMsg = if (currentLang == "ms") "Bengkel ini telah tamat." else "This workshop has already passed."
+    val pastUnregisterMsg = if (currentLang == "ms") "Tidak boleh membatalkan bengkel yang telah tamat." else "Cannot unregister from past workshops."
 
     val isDark = AppSettingsState.isDarkMode
     val backgroundColor = if (isDark) Color(0xFF121212) else Color(0xFFF9F9F9)
@@ -103,6 +105,11 @@ fun WorkshopListScreen(
     val secondaryTextColor = if (isDark) Color.LightGray else Color.Gray
 
     LaunchedEffect(currentUserId) {
+        if (currentUserId == null) {
+            isLoading = false
+            return@LaunchedEffect
+        }
+
         firestore.collection("users").document(currentUserId)
             .get()
             .addOnSuccessListener { doc ->
@@ -122,7 +129,7 @@ fun WorkshopListScreen(
                 val workshops = snapshot.documents
 
                 firestore.collection("registrations")
-                    .whereEqualTo("studentId", currentUserId)
+                    .whereEqualTo("userId", currentUserId)
                     .addSnapshotListener { regSnapshot, _ ->
                         val registeredWorkshopIds = regSnapshot?.documents?.mapNotNull { it.getString("workshopId") } ?: emptyList()
 
@@ -134,20 +141,21 @@ fun WorkshopListScreen(
                             val max = parts.getOrNull(1)?.trim()?.split(" ")?.getOrNull(0)?.toIntOrNull() ?: 0
                             val wId = doc.id
                             val wDate = doc.getString("date") ?: ""
+                            val wTime = doc.getString("time") ?: ""
 
                             StudentWorkshop(
                                 id = wId,
                                 title = doc.getString("title") ?: "",
                                 description = doc.getString("description") ?: "",
                                 date = wDate,
-                                time = doc.getString("time") ?: "",
+                                time = wTime,
                                 location = doc.getString("location") ?: "",
                                 currentCount = current,
                                 maxSlots = max,
                                 isRegistered = registeredWorkshopIds.contains(wId),
-                                isPast = isPastDate(wDate)
+                                isPast = isPastDate(wDate, wTime)
                             )
-                        }.sortedByDescending { parseDate(it.date)?.time ?: 0L } // Tersusun dari tarikh paling lewat ke terawal
+                        }.sortedByDescending { parseDate(it.date)?.time ?: 0L }
 
                         workshopList.addAll(newList)
                         isLoading = false
@@ -163,9 +171,9 @@ fun WorkshopListScreen(
                     workshop.description.contains(searchQuery, ignoreCase = true)
 
             val matchesTab = when (selectedTab) {
-                "Today" -> isSameDay(workshop.date, Date())
-                "This week" -> isWithinThisWeek(workshop.date)
-                "Upcoming" -> isFutureDate(workshop.date)
+                "Today" -> isSameDay(workshop.date, Date()) && !workshop.isPast
+                "This week" -> isWithinThisWeek(workshop.date, workshop.time)
+                "Upcoming" -> isFutureDate(workshop.date, workshop.time)
                 "Past" -> workshop.isPast
                 else -> true
             }
@@ -317,36 +325,46 @@ fun WorkshopListScreen(
                             unregisterLabel = if (currentLang == "ms") "Batalkan Pendaftaran" else "Unregister",
                             pastLabel = if (currentLang == "ms") "Telah Tamat" else "Event Ended",
                             onActionClick = {
-                                if (workshop.isPast && !workshop.isRegistered) {
+                                if (currentUserId == null) {
+                                    Toast.makeText(context, "User not logged in", Toast.LENGTH_SHORT).show()
+                                } else if (workshop.isPast && !workshop.isRegistered) {
                                     Toast.makeText(context, pastEventMsg, Toast.LENGTH_SHORT).show()
-                                    return@WorkshopCard
-                                }
-
-                                if (workshop.isRegistered) {
-                                    val workshopRef = firestore.collection("workshops").document(workshop.id)
-                                    val regDocRef = firestore.collection("registrations").document("${workshop.id}_$currentUserId")
-
-                                    firestore.runTransaction { transaction ->
-                                        val snapshot = transaction.get(workshopRef)
-                                        val regString = snapshot.getString("registeredCount") ?: "0/0"
-                                        val parts = regString.split("/")
-                                        val currentCount = parts.getOrNull(0)?.trim()?.toIntOrNull() ?: 1
-                                        val maxSlots = parts.getOrNull(1)?.trim()?.split(" ")?.getOrNull(0)?.toIntOrNull() ?: 0
-
-                                        val newCount = if (currentCount > 0) currentCount - 1 else 0
-
-                                        transaction.delete(regDocRef)
-                                        transaction.update(workshopRef, "registeredCount", "$newCount/$maxSlots registered")
-                                    }.addOnSuccessListener {
-                                        cancelWorkshopReminders(context, workshop.id, currentUserId)
-                                        Toast.makeText(context, unregisterMsg, Toast.LENGTH_SHORT).show()
-                                        onRegisterSuccess()
-                                    }.addOnFailureListener { e ->
-                                        Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
-                                    }
+                                } else if (workshop.isPast && workshop.isRegistered) {
+                                    Toast.makeText(context, pastUnregisterMsg, Toast.LENGTH_SHORT).show()
                                 } else {
-                                    selectedWorkshop = workshop
-                                    showDialog = true
+                                    if (workshop.isRegistered) {
+                                        val workshopRef = firestore.collection("workshops").document(workshop.id)
+
+                                        firestore.collection("users").document(currentUserId).get().addOnSuccessListener { userDoc ->
+                                            val fetchedStudentId = userDoc.getString("studentId") ?: userDoc.getString("matrixNo") ?: userDoc.getString("idNumber") ?: fallbackStudentId
+
+                                            val regDocRefByAuth = firestore.collection("registrations").document("${workshop.id}_$currentUserId")
+                                            val regDocRefByStudentId = firestore.collection("registrations").document("${workshop.id}_$fetchedStudentId")
+
+                                            firestore.runTransaction { transaction ->
+                                                val snapshot = transaction.get(workshopRef)
+                                                val regString = snapshot.getString("registeredCount") ?: "0/0"
+                                                val parts = regString.split("/")
+                                                val currentCount = parts.getOrNull(0)?.trim()?.toIntOrNull() ?: 1
+                                                val maxSlots = parts.getOrNull(1)?.trim()?.split(" ")?.getOrNull(0)?.toIntOrNull() ?: 0
+
+                                                val newCount = if (currentCount > 0) currentCount - 1 else 0
+
+                                                transaction.delete(regDocRefByAuth)
+                                                transaction.delete(regDocRefByStudentId)
+                                                transaction.update(workshopRef, "registeredCount", "$newCount/$maxSlots registered")
+                                            }.addOnSuccessListener {
+                                                cancelWorkshopReminders(context, workshop.id, currentUserId)
+                                                Toast.makeText(context, unregisterMsg, Toast.LENGTH_SHORT).show()
+                                                onRegisterSuccess()
+                                            }.addOnFailureListener { e ->
+                                                Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    } else {
+                                        selectedWorkshop = workshop
+                                        showDialog = true
+                                    }
                                 }
                             }
                         )
@@ -355,7 +373,7 @@ fun WorkshopListScreen(
             }
         }
 
-        if (showDialog && selectedWorkshop != null) {
+        if (showDialog && selectedWorkshop != null && currentUserId != null) {
             AlertDialog(
                 onDismissRequest = { showDialog = false },
                 containerColor = cardBgColor,
@@ -368,11 +386,14 @@ fun WorkshopListScreen(
                         onClick = {
                             val workshopId = selectedWorkshop!!.id
                             val workshopRef = firestore.collection("workshops").document(workshopId)
-                            val globalRegistrationDocRef = firestore.collection("registrations").document("${workshopId}_$currentUserId")
 
                             firestore.collection("users").document(currentUserId).get().addOnSuccessListener { userDoc ->
                                 val fetchedFullName = userDoc.getString("fullName") ?: userDoc.getString("name") ?: "Student"
                                 val fetchedStudentId = userDoc.getString("studentId") ?: userDoc.getString("matrixNo") ?: userDoc.getString("idNumber") ?: fallbackStudentId
+                                val fetchedCardUid = userDoc.getString("cardUid") ?: userDoc.getString("nfcUid") ?: ""
+
+                                val regDocRefByAuth = firestore.collection("registrations").document("${workshopId}_$currentUserId")
+                                val regDocRefByStudentId = firestore.collection("registrations").document("${workshopId}_$fetchedStudentId")
 
                                 firestore.runTransaction { transaction ->
                                     val snapshot = transaction.get(workshopRef)
@@ -384,14 +405,20 @@ fun WorkshopListScreen(
                                     if (currentCount < maxSlots) {
                                         val newCount = currentCount + 1
 
-                                        transaction.set(globalRegistrationDocRef, mapOf(
+                                        val registrationData = mapOf(
                                             "workshopId" to workshopId,
-                                            "studentId" to currentUserId,
+                                            "userId" to currentUserId,
+                                            "studentId" to fetchedStudentId,
                                             "studentNumber" to fetchedStudentId,
                                             "fullName" to fetchedFullName,
                                             "name" to fetchedFullName,
+                                            "cardUid" to fetchedCardUid,
+                                            "nfcUid" to fetchedCardUid,
                                             "status" to "REGISTERED"
-                                        ))
+                                        )
+
+                                        transaction.set(regDocRefByAuth, registrationData, SetOptions.merge())
+                                        transaction.set(regDocRefByStudentId, registrationData, SetOptions.merge())
 
                                         transaction.update(workshopRef, "registeredCount", "$newCount/$maxSlots registered")
                                         null
@@ -465,6 +492,31 @@ fun parseDate(dateStr: String): Date? {
     return null
 }
 
+fun parseWorkshopDateTime(dateStr: String, timeStr: String): Date? {
+    val baseDate = parseDate(dateStr) ?: return null
+    if (timeStr.isBlank()) return baseDate
+
+    val timeCleaned = timeStr.trim().uppercase(Locale.ENGLISH)
+    val timeFormats = listOf(
+        SimpleDateFormat("yyyy-MM-dd hh:mm a", Locale.ENGLISH),
+        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ENGLISH),
+        SimpleDateFormat("dd/MM/yyyy hh:mm a", Locale.ENGLISH),
+        SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.ENGLISH)
+    )
+
+    val dateOnlyStr = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).format(baseDate)
+    val combinedStr = "$dateOnlyStr $timeCleaned"
+
+    for (f in timeFormats) {
+        f.isLenient = true
+        try {
+            val parsed = f.parse(combinedStr)
+            if (parsed != null) return parsed
+        } catch (_: Exception) { }
+    }
+    return baseDate
+}
+
 fun stripTime(date: Date): Date {
     val cal = Calendar.getInstance().apply {
         time = date
@@ -481,9 +533,11 @@ fun isSameDay(dateStr: String, targetDate: Date): Boolean {
     return stripTime(d).time == stripTime(targetDate).time
 }
 
-fun isWithinThisWeek(dateStr: String): Boolean {
-    val d = parseDate(dateStr) ?: return false
-    val workshopDate = stripTime(d)
+fun isWithinThisWeek(dateStr: String, timeStr: String): Boolean {
+    val fullDateTime = parseWorkshopDateTime(dateStr, timeStr) ?: parseDate(dateStr) ?: return false
+    if (fullDateTime.before(Date())) return false
+
+    val workshopDate = stripTime(fullDateTime)
     val today = stripTime(Date())
 
     val cal = Calendar.getInstance().apply {
@@ -500,18 +554,14 @@ fun isWithinThisWeek(dateStr: String): Boolean {
     return (workshopDate.time >= startOfWeek.time) && (workshopDate.time <= endOfWeek.time)
 }
 
-fun isFutureDate(dateStr: String): Boolean {
-    val d = parseDate(dateStr) ?: return false
-    val workshopDate = stripTime(d)
-    val today = stripTime(Date())
-    return workshopDate.after(today)
+fun isFutureDate(dateStr: String, timeStr: String): Boolean {
+    val fullDateTime = parseWorkshopDateTime(dateStr, timeStr) ?: parseDate(dateStr) ?: return false
+    return fullDateTime.after(Date())
 }
 
-fun isPastDate(dateStr: String): Boolean {
-    val d = parseDate(dateStr) ?: return false
-    val workshopDate = stripTime(d)
-    val today = stripTime(Date())
-    return workshopDate.before(today)
+fun isPastDate(dateStr: String, timeStr: String): Boolean {
+    val fullDateTime = parseWorkshopDateTime(dateStr, timeStr) ?: parseDate(dateStr) ?: return false
+    return fullDateTime.before(Date())
 }
 
 @Composable
@@ -553,6 +603,9 @@ fun WorkshopCard(
     pastLabel: String,
     onActionClick: () -> Unit
 ) {
+    val currentLang = AppSettingsState.currentLanguage
+    val registeredPastText = if (currentLang == "ms") "Telah Didaftar (Selesai)" else "Registered (Completed)"
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -597,11 +650,20 @@ fun WorkshopCard(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                val buttonEnabled = !(isPast && !isRegistered)
+                // Bengkel lepas sentiasa disabled
+                val buttonEnabled = !isPast
+
                 val buttonContainerColor = when {
-                    isRegistered -> Color(0xFFC62828)
                     isPast -> Color.Gray
+                    isRegistered -> Color(0xFFC62828)
                     else -> Color(0xFF4A90E2)
+                }
+
+                val buttonText = when {
+                    isPast && isRegistered -> registeredPastText
+                    isPast && !isRegistered -> pastLabel
+                    isRegistered -> unregisterLabel
+                    else -> registerLabel
                 }
 
                 Button(
@@ -609,13 +671,13 @@ fun WorkshopCard(
                     enabled = buttonEnabled,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = buttonContainerColor,
-                        disabledContainerColor = Color.DarkGray
+                        disabledContainerColor = Color.Gray
                     ),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = if (isRegistered) unregisterLabel else if (isPast) pastLabel else registerLabel,
+                        text = buttonText,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White

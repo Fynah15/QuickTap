@@ -20,11 +20,9 @@ import androidx.navigation.navArgument
 import com.example.quicktap.auth.*
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
-
-object AppSettingsState {
-    var isDarkMode by mutableStateOf(false)
-    var currentLanguage by mutableStateOf("en")
-}
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
@@ -58,16 +56,27 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun QuickTapAppNavigation() {
     val navController = rememberNavController()
+    val firestore = remember { FirebaseFirestore.getInstance() }
 
     var currentUser by remember { mutableStateOf(FirebaseAuth.getInstance().currentUser) }
 
     DisposableEffect(Unit) {
         val authListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
             currentUser = firebaseAuth.currentUser
+            currentUser?.uid?.let { uid ->
+                AppSettingsState.loadUserSettings(firestore, uid)
+            }
         }
         FirebaseAuth.getInstance().addAuthStateListener(authListener)
         onDispose {
             FirebaseAuth.getInstance().removeAuthStateListener(authListener)
+        }
+    }
+
+    // Auto-load tetapan apabila aplikasi bermula jika pengguna sudah log masuk
+    LaunchedEffect(currentUser) {
+        currentUser?.uid?.let { uid ->
+            AppSettingsState.loadUserSettings(firestore, uid)
         }
     }
 
@@ -76,15 +85,32 @@ fun QuickTapAppNavigation() {
 
     var activeWorkshopId by remember { mutableStateOf(defaultWorkshopId) }
 
+    // Auto fetch today's active workshop dynamically to eliminate hardcoded/test IDs
     LaunchedEffect(Unit) {
         try {
-            FirebaseFirestore.getInstance().collection("workshops")
-                .limit(1)
+            val dateFormatStandard = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+            val dateFormatAlternate = SimpleDateFormat("yyyy-M-d", Locale.getDefault())
+            val currentDate = Date()
+            val todayStandard = dateFormatStandard.format(currentDate)
+            val todayAlternate = dateFormatAlternate.format(currentDate)
+
+            firestore.collection("workshops")
                 .get()
                 .addOnSuccessListener { result ->
                     if (!result.isEmpty) {
-                        val doc = result.documents[0]
-                        activeWorkshopId = doc.id
+                        val matchingDoc = result.documents.firstOrNull { doc ->
+                            val dateField = doc.getString("date")
+                                ?: doc.getString("workshopDate")
+                                ?: doc.getString("tarikh")
+                                ?: ""
+                            dateField == todayStandard || dateField == todayAlternate
+                        }
+
+                        if (matchingDoc != null) {
+                            activeWorkshopId = matchingDoc.id
+                        } else {
+                            activeWorkshopId = result.documents[0].id
+                        }
                     }
                 }
         } catch (e: Exception) {
@@ -110,16 +136,19 @@ fun QuickTapAppNavigation() {
                         popUpTo("role_select") { inclusive = true }
                     }
                 },
-                onSignUp = { navController.navigate("student_signup") }
+                onSignUp = { navController.navigate("student_signup") },
+                onForgotPasswordClick = { navController.navigate("forgot_password") }
             )
         }
+
         composable("student_signup") {
             StudentSignUpScreen(
                 onNavigateToHome = {
                     navController.navigate("student_dashboard") {
                         popUpTo("role_select") { inclusive = true }
                     }
-                }
+                },
+                onBackToLogin = { navController.popBackStack() }
             )
         }
 
@@ -131,10 +160,27 @@ fun QuickTapAppNavigation() {
                     }
                 },
                 onSignUpClick = { navController.navigate("staff_signup") },
+                onForgotPasswordClick = { navController.navigate("forgot_password") },
                 onBackClick = { navController.popBackStack() }
             )
         }
-        composable("staff_signup") { StaffSignUpScreen(onSignUpSuccess = { navController.navigate("staff_login") }, onBackToLogin = { navController.popBackStack() }) }
+
+        composable("staff_signup") {
+            StaffSignUpScreen(
+                onSignUpSuccess = {
+                    navController.navigate("staff_dashboard") {
+                        popUpTo("role_select") { inclusive = true }
+                    }
+                },
+                onBackToLogin = { navController.popBackStack() }
+            )
+        }
+
+        composable("forgot_password") {
+            ForgotPasswordScreen(
+                onBackToLogin = { navController.popBackStack() }
+            )
+        }
 
         // --- STUDENT DASHBOARD ---
         composable("student_dashboard") {
@@ -227,7 +273,10 @@ fun QuickTapAppNavigation() {
             StaffDashboardScreen(
                 onAttendanceModeClick = { navController.navigate("staff_attendance_mode") },
                 onSelectWorkshopClick = { navController.navigate("staff_workshop_list") },
-                onViewAnalyticsClick = { navController.navigate("staff_analytics/$activeWorkshopId") },
+                onViewAnalyticsClick = { workshopId ->
+                    activeWorkshopId = workshopId
+                    navController.navigate("staff_analytics/$workshopId")
+                },
                 onReportClick = { navController.navigate("staff_attendance_report/$activeWorkshopId") },
                 onSettingsClick = { navController.navigate("staff_settings") },
                 onCertificateManagementClick = { navController.navigate("staff_certificate_management/$activeWorkshopId") }
@@ -268,7 +317,7 @@ fun QuickTapAppNavigation() {
                 onModeSelected = { mode ->
                     navController.navigate("staff_nfc_scan/${Uri.encode(mode)}/$activeWorkshopId")
                 },
-                onBackClick = { navController.popBackStack() }
+                onBackClick = { navController.popBackStack() } // <--- Parameter onBackClick yang ditambah
             )
         }
 
@@ -276,8 +325,7 @@ fun QuickTapAppNavigation() {
             route = "staff_nfc_scan/{attendanceMode}/{workshopId}",
             arguments = listOf(
                 navArgument("attendanceMode") { type = NavType.StringType },
-                navArgument("workshopId") { type = NavType.StringType }
-            )
+                navArgument("workshopId") { type = NavType.StringType })
         ) { backStackEntry ->
             val mode = backStackEntry.arguments?.getString("attendanceMode") ?: "Check-In"
             val targetWorkshopId = backStackEntry.arguments?.getString("workshopId") ?: activeWorkshopId

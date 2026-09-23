@@ -11,23 +11,28 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import java.text.SimpleDateFormat
+import java.util.*
 
-data class WorkshopHistoryItem(
+data class CertificateHistoryItem(
     val workshopId: String,
     val workshopTitle: String,
     val date: String,
-    val checkInStatus: String,
-    val checkOutStatus: String,
-    val isEligibleForCert: Boolean
+    val checkInTimeText: String,
+    val checkOutTimeText: String
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -38,109 +43,96 @@ fun StudentHistoryScreen(
     onViewCertificateClick: (String) -> Unit
 ) {
     val firestore = FirebaseFirestore.getInstance()
-    var historyList = remember { mutableStateListOf<WorkshopHistoryItem>() }
+    var certificateList = remember { mutableStateListOf<CertificateHistoryItem>() }
     var isLoading by remember { mutableStateOf(true) }
     val coroutineScope = rememberCoroutineScope()
+    val currentUserId = FirebaseAuth.getInstance().currentUser?.uid
 
-    // 1. Sokongan Bahasa Dinamik
-    val currentLang = AppSettingsState.currentLanguage
-    val historyTitle = if (currentLang == "ms") "Sejarah & Sijil Bengkel" else "Workshop History & Certificates"
-    val noHistoryText = if (currentLang == "ms") "Tiada sejarah bengkel dijumpai." else "No workshop history found."
-    val dateLabel = if (currentLang == "ms") "Tarikh: " else "Date: "
-    val checkedInText = if (currentLang == "ms") "Sudah Daftar Masuk" else "Checked-In"
-    val checkedOutText = if (currentLang == "ms") "Sudah Daftar Keluar" else "Checked-Out"
-    val pendingText = if (currentLang == "ms") "Dalam Proses" else "Pending"
-    val viewCertText = if (currentLang == "ms") "Lihat Sijil 🏆" else "View Certificate 🏆"
-    val certReadyText = if (currentLang == "ms") "Sijil Layak Dimuat Turun" else "Certificate Available"
+    val historyTitle = "Your Workshop Certificates"
+    val noHistoryText = "No workshop certificates available yet."
+    val dateLabel = "Date: "
+    val viewCertText = "View Certificate"
+    val certReadyText = "Official Certificate Available"
 
-    // 2. Sokongan Tema Gelap / Cerah (Dark / Light Mode)
     val isDark = AppSettingsState.isDarkMode
-    val backgroundColor = if (isDark) Color(0xFF121212) else Color.White
-    val cardBgColor = if (isDark) Color(0xFF1E1E1E) else Color(0xFFF9F9F9)
-    val borderColor = if (isDark) Color(0xFF333333) else Color.LightGray
-    val textColor = if (isDark) Color.White else Color.Black
-    val secondaryTextColor = if (isDark) Color.LightGray else Color.Gray
+    val backgroundColor = if (isDark) Color(0xFF121212) else Color(0xFFF8F9FA)
+    val cardBgColor = if (isDark) Color(0xFF1E1E1E) else Color.White
+    val borderColor = if (isDark) Color(0xFF2C2C2C) else Color(0xFFE5E7EB)
+    val textColor = if (isDark) Color.White else Color(0xFF1F2937)
+    val secondaryTextColor = if (isDark) Color(0xFF9CA3AF) else Color(0xFF6B7280)
 
-    // Real-time snapshot listener dengan DisposableEffect yang sah pada skop Composable
-    DisposableEffect(studentId) {
-        val TAG = "HistoryDebug"
-        if (studentId.isEmpty()) {
+    DisposableEffect(studentId, currentUserId) {
+        if (studentId.isEmpty() && currentUserId == null) {
             isLoading = false
             return@DisposableEffect onDispose {}
         }
 
-        Log.d(TAG, "Memulakan real-time listener untuk studentId: $studentId")
+        val possibleIds = listOf(studentId, "STU_${studentId.takeLast(6)}", studentId.uppercase(), studentId.lowercase()).filter { it.isNotEmpty() }
+        val allDocsMap = mutableMapOf<String, DocumentSnapshot>()
+        val listeners = mutableListOf<ListenerRegistration>()
 
-        val listenerRegistration = firestore.collection("registrations")
-            .whereEqualTo("studentId", studentId)
-            .addSnapshotListener { regSnapshot, error ->
-                if (error != null) {
-                    Log.e(TAG, "Ralat mendengar perubahan pendaftaran", error)
-                    isLoading = false
-                    return@addSnapshotListener
-                }
-
-                if (regSnapshot == null || regSnapshot.isEmpty) {
-                    historyList.clear()
-                    isLoading = false
-                    return@addSnapshotListener
-                }
-
-                // Lancarkan coroutine yang selamat menggunakan remembered scope
-                coroutineScope.launch {
-                    val tempList = mutableListOf<WorkshopHistoryItem>()
-
-                    for (regDoc in regSnapshot.documents) {
-                        val workshopId = regDoc.getString("workshopId") ?: ""
-                        val hasCheckedIn = AttendanceUtils.hasNfcCheckIn(regDoc)
-                        val hasCheckedOut = AttendanceUtils.hasNfcCheckOut(regDoc)
-                        val isEligible = AttendanceUtils.isEligibleForCertificate(regDoc)
-
-                        var workshopTitle = "Workshop"
-                        var workshopDate = "Recent"
-
-                        if (workshopId.isNotEmpty()) {
-                            try {
-                                val workshopDoc = firestore.collection("workshops").document(workshopId).get().await()
-                                if (workshopDoc.exists()) {
-                                    workshopTitle = workshopDoc.getString("title") ?: workshopDoc.getString("name") ?: "Workshop"
-                                    workshopDate = workshopDoc.getString("date") ?: "Recent"
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Gagal ambil info workshop: $workshopId", e)
-                            }
-                        }
-
-                        val checkInStr = if (hasCheckedIn) checkedInText else pendingText
-                        val checkOutStr = if (hasCheckedOut) checkedOutText else pendingText
-
-                        tempList.add(
-                            WorkshopHistoryItem(
-                                workshopId = workshopId,
-                                workshopTitle = workshopTitle,
-                                date = workshopDate,
-                                checkInStatus = checkInStr,
-                                checkOutStatus = checkOutStr,
-                                isEligibleForCert = isEligible
-                            )
-                        )
-                    }
-
-                    historyList.clear()
-                    historyList.addAll(tempList)
-                    isLoading = false
-                }
+        fun updateUiIfReady() {
+            coroutineScope.launch {
+                processCertificateDocs(
+                    docs = allDocsMap.values.toList(),
+                    firestore = firestore,
+                    certificateList = certificateList,
+                    onComplete = { isLoading = false }
+                )
             }
+        }
+
+        if (currentUserId != null) {
+            val l1 = firestore.collection("registrations")
+                .whereEqualTo("userId", currentUserId)
+                .addSnapshotListener { snapshot, _ ->
+                    if (snapshot != null) {
+                        for (doc in snapshot.documents) {
+                            allDocsMap[doc.id] = doc
+                        }
+                        updateUiIfReady()
+                    }
+                }
+            listeners.add(l1)
+        }
+
+        if (possibleIds.isNotEmpty()) {
+            val l2 = firestore.collection("registrations")
+                .whereIn("studentId", possibleIds)
+                .addSnapshotListener { snapshot, _ ->
+                    if (snapshot != null) {
+                        for (doc in snapshot.documents) {
+                            allDocsMap[doc.id] = doc
+                        }
+                        updateUiIfReady()
+                    }
+                }
+            listeners.add(l2)
+
+            val l3 = firestore.collection("registrations")
+                .whereEqualTo("studentNumber", studentId)
+                .addSnapshotListener { snapshot, _ ->
+                    if (snapshot != null) {
+                        for (doc in snapshot.documents) {
+                            allDocsMap[doc.id] = doc
+                        }
+                        updateUiIfReady()
+                    }
+                }
+            listeners.add(l3)
+        }
 
         onDispose {
-            listenerRegistration.remove()
+            for (listener in listeners) {
+                listener.remove()
+            }
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(historyTitle, color = Color.White, fontSize = 16.sp) },
+                title = { Text(historyTitle, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
@@ -154,20 +146,19 @@ fun StudentHistoryScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(backgroundColor)
                 .padding(paddingValues)
-                .padding(16.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             contentAlignment = Alignment.Center
         ) {
             when {
                 isLoading -> {
                     CircularProgressIndicator(color = Color(0xFF912323))
                 }
-                historyList.isEmpty() -> {
+                certificateList.isEmpty() -> {
                     Text(
                         text = noHistoryText,
                         color = secondaryTextColor,
-                        fontSize = 16.sp
+                        fontSize = 15.sp
                     )
                 }
                 else -> {
@@ -175,11 +166,12 @@ fun StudentHistoryScreen(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(historyList, key = { it.workshopId }) { item ->
+                        items(certificateList, key = { it.workshopId }) { item ->
                             Card(
                                 colors = CardDefaults.cardColors(containerColor = cardBgColor),
-                                shape = RoundedCornerShape(8.dp),
+                                shape = RoundedCornerShape(12.dp),
                                 border = BorderStroke(1.dp, borderColor),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Column(
@@ -190,16 +182,20 @@ fun StudentHistoryScreen(
                                     Text(
                                         text = item.workshopTitle,
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 15.sp,
+                                        fontSize = 17.sp,
                                         color = textColor
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
+
                                     Text(
                                         text = "$dateLabel${item.date}",
                                         fontSize = 13.sp,
                                         color = secondaryTextColor
                                     )
-                                    Spacer(modifier = Modifier.height(8.dp))
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    HorizontalDivider(color = borderColor, thickness = 0.8.dp)
+                                    Spacer(modifier = Modifier.height(12.dp))
 
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
@@ -208,37 +204,38 @@ fun StudentHistoryScreen(
                                     ) {
                                         Column {
                                             Text(
-                                                text = "Check-In: ${item.checkInStatus}",
+                                                text = certReadyText,
                                                 fontSize = 12.sp,
-                                                color = secondaryTextColor
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF16A34A)
                                             )
-                                            Text(
-                                                text = "Check-Out: ${item.checkOutStatus}",
-                                                fontSize = 12.sp,
-                                                color = secondaryTextColor
-                                            )
-
-                                            if (item.isEligibleForCert) {
-                                                Spacer(modifier = Modifier.height(4.dp))
+                                            if (item.checkInTimeText.isNotEmpty()) {
+                                                Spacer(modifier = Modifier.height(2.dp))
                                                 Text(
-                                                    text = certReadyText,
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = Color(0xFF2E7D32)
+                                                    text = "Completed: ${item.checkInTimeText}",
+                                                    fontSize = 11.sp,
+                                                    color = secondaryTextColor
                                                 )
                                             }
                                         }
+                                    }
 
-                                        if (item.isEligibleForCert) {
-                                            Button(
-                                                onClick = { onViewCertificateClick(item.workshopId) },
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A90E2)),
-                                                shape = RoundedCornerShape(6.dp),
-                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                                            ) {
-                                                Text(viewCertText, color = Color.White, fontSize = 12.sp)
-                                            }
-                                        }
+                                    Spacer(modifier = Modifier.height(16.dp))
+
+                                    Button(
+                                        onClick = { onViewCertificateClick(item.workshopId) },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(40.dp)
+                                    ) {
+                                        Text(
+                                            text = viewCertText,
+                                            color = Color.White,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
                                     }
                                 }
                             }
@@ -248,4 +245,83 @@ fun StudentHistoryScreen(
             }
         }
     }
+}
+
+private suspend fun processCertificateDocs(
+    docs: List<DocumentSnapshot>,
+    firestore: FirebaseFirestore,
+    certificateList: SnapshotStateList<CertificateHistoryItem>,
+    onComplete: () -> Unit
+) {
+    val tempList = mutableListOf<CertificateHistoryItem>()
+
+    for (regDoc in docs) {
+        val isEligible = AttendanceUtils.isEligibleForCertificate(regDoc)
+        if (!isEligible) continue
+
+        val workshopId = regDoc.getString("workshopId") ?: ""
+        Log.d("CertHistoryDebug", "Processing registration with workshopId: $workshopId")
+
+        val checkInTimeStr = AttendanceUtils.formatTimestamp(regDoc.get("timestamp") ?: regDoc.get("checkInTimestamp"))
+        val checkOutTimeStr = AttendanceUtils.formatTimestamp(regDoc.get("checkOutTime") ?: regDoc.get("checkOutTimestamp"))
+
+        var workshopTitle = "Workshop"
+        var workshopDate = "Recent"
+
+        if (workshopId.isNotEmpty()) {
+            try {
+                val workshopDoc = firestore.collection("workshops").document(workshopId).get().await()
+                if (workshopDoc.exists()) {
+                    // Semak pelbagai variasi field tajuk
+                    workshopTitle = workshopDoc.getString("title")
+                        ?: workshopDoc.getString("name")
+                                ?: workshopDoc.getString("workshopName")
+                                ?: workshopDoc.getString("eventName")
+                                ?: workshopDoc.getString("eventTitle")
+                                ?: "Workshop"
+
+                    // Semak pelbagai variasi field tarikh (Termasuk juga jenis Timestamp jika ada)
+                    val rawDate = workshopDoc.get("date")
+                        ?: workshopDoc.get("workshopDate")
+                        ?: workshopDoc.get("eventDate")
+                        ?: workshopDoc.get("timestamp")
+
+                    workshopDate = when (rawDate) {
+                        is com.google.firebase.Timestamp -> {
+                            SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(rawDate.toDate())
+                        }
+                        is Date -> {
+                            SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(rawDate)
+                        }
+                        is String -> {
+                            if (rawDate.isNotBlank()) rawDate else "Recent"
+                        }
+                        else -> "Recent"
+                    }
+                } else {
+                    Log.w("CertHistoryDebug", "Workshop document not found for ID: $workshopId")
+                }
+            } catch (e: Exception) {
+                Log.e("CertHistoryDebug", "Failed to retrieve workshop data for ID: $workshopId", e)
+            }
+        } else {
+            Log.w("CertHistoryDebug", "workshopId is empty in registration doc: ${regDoc.id}")
+        }
+
+        if (tempList.none { it.workshopId == workshopId }) {
+            tempList.add(
+                CertificateHistoryItem(
+                    workshopId = workshopId,
+                    workshopTitle = workshopTitle,
+                    date = workshopDate,
+                    checkInTimeText = checkInTimeStr,
+                    checkOutTimeText = checkOutTimeStr
+                )
+            )
+        }
+    }
+
+    certificateList.clear()
+    certificateList.addAll(tempList)
+    onComplete()
 }

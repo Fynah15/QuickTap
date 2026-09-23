@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -78,7 +79,7 @@ fun StudentDashboardScreen(
     fun bindUserData(document: com.google.firebase.firestore.DocumentSnapshot) {
         val fetchedFullName = document.getString("fullName") ?: document.getString("name") ?: ""
         val fetchedNick = document.getString("nickname") ?: ""
-        val fetchedStudentId = document.getString("studentId") ?: ""
+        val fetchedStudentId = document.getString("studentId") ?: document.getString("id") ?: ""
         val fetchedCourse = document.getString("course") ?: document.getString("program") ?: ""
 
         if (fetchedFullName.isNotEmpty()) {
@@ -95,6 +96,11 @@ fun StudentDashboardScreen(
 
         if (fetchedStudentId.isNotEmpty()) {
             studentIdNumber = fetchedStudentId
+            try {
+                WorkshopReminderManager.checkAndTriggerReminders(context, fetchedStudentId)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
 
         if (fetchedCourse.isNotEmpty()) {
@@ -117,12 +123,6 @@ fun StudentDashboardScreen(
         val userEmail = currentUser?.email
 
         if (uid != null) {
-            try {
-                WorkshopReminderManager.checkAndTriggerReminders(context, uid)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-
             firestore.collection("users").document(uid).get()
                 .addOnSuccessListener { document ->
                     if (document != null && document.exists()) {
@@ -231,8 +231,8 @@ fun StudentDashboardScreen(
     val studentIdTitle = if (currentLang == "ms") "ID PELAJAR" else "STUDENT ID"
 
     val quickAccessTitle = if (currentLang == "ms") "Akses Pantas" else "Quick Access"
-    val workshopListLabel = if (currentLang == "ms") "Senarai Bengkel" else "Workshop List"
-    val certificateLabel = if (currentLang == "ms") "Sijil" else "Certificate"
+    val workshopListLabel = if (currentLang == "ms") "Senarai Bengkel" else "Workshops"
+    val certificateLabel = if (currentLang == "ms") "Sijil" else "Certificates"
     val historyLabel = if (currentLang == "ms") "Sejarah" else "History"
 
     val highlightTitle = if (currentLang == "ms") "Sorotan Acara Akan Datang" else "Upcoming Event Highlight"
@@ -243,11 +243,6 @@ fun StudentDashboardScreen(
     val okText = "OK"
     val dismissText = if (currentLang == "ms") "Tutup" else "Dismiss"
 
-    val notifDialogTitle = if (currentLang == "ms") "Notifikasi Terkini" else "Latest Notification"
-    val notifDesc1 = if (currentLang == "ms") "• Peringatan: Bengkel akan datang akan dimaklumkan melalui notifikasi peringatan peranti." else "• Reminder: Upcoming workshops will be notified via device schedule reminders."
-    val notifDesc2 = if (currentLang == "ms") "• Status: Peranti anda telah bersedia menerima pemberitahuan jadual." else "• Status: Your device is ready to receive schedule notifications."
-    val closeText = if (currentLang == "ms") "Tutup" else "Close"
-
     val isDark = AppSettingsState.isDarkMode
     val backgroundColor = if (isDark) Color(0xFF121212) else Color(0xFFF9F9F9)
     val cardBgColor = if (isDark) Color(0xFF1E1E1E) else Color.White
@@ -255,8 +250,10 @@ fun StudentDashboardScreen(
     val secondaryTextColor = if (isDark) Color.LightGray else Color.Gray
     val placeholderColor = if (isDark) Color(0xFF2C2C2C) else Color.LightGray
 
-    DisposableEffect(key1 = currentWorkshopId) {
-        val documentId = "${currentWorkshopId}_${myStudentId}"
+    val activeStudentId = if (studentIdNumber.isNotEmpty()) studentIdNumber else myStudentId
+
+    DisposableEffect(key1 = currentWorkshopId, key2 = activeStudentId) {
+        val documentId = "${currentWorkshopId}_${activeStudentId}"
         val registrationRef = firestore.collection("registrations").document(documentId)
 
         val listenerRegistration = registrationRef.addSnapshotListener { snapshot, error ->
@@ -286,7 +283,7 @@ fun StudentDashboardScreen(
                 Button(
                     onClick = {
                         showAttendanceAlert = false
-                        lastProcessedDocId = "${currentWorkshopId}_${myStudentId}"
+                        lastProcessedDocId = "${currentWorkshopId}_${activeStudentId}"
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A90E2))
                 ) {
@@ -299,29 +296,6 @@ fun StudentDashboardScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF912323))
                 ) {
                     Text(dismissText, color = Color.White)
-                }
-            }
-        )
-    }
-
-    if (showNotificationDialog) {
-        AlertDialog(
-            onDismissRequest = { showNotificationDialog = false },
-            title = { Text(notifDialogTitle, fontWeight = FontWeight.Bold, color = textColor) },
-            text = {
-                Column {
-                    Text(notifDesc1, color = secondaryTextColor, fontSize = 14.sp)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(notifDesc2, color = secondaryTextColor, fontSize = 14.sp)
-                }
-            },
-            containerColor = cardBgColor,
-            confirmButton = {
-                Button(
-                    onClick = { showNotificationDialog = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF912323))
-                ) {
-                    Text(closeText, color = Color.White)
                 }
             }
         )
@@ -409,24 +383,24 @@ fun StudentDashboardScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onProfileClick() },
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = cardBgColor),
-                elevation = CardDefaults.cardElevation(4.dp)
+                elevation = CardDefaults.cardElevation(2.dp)
             ) {
                 Column {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(Color(0xFF912323))
-                            .padding(8.dp),
+                            .padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(universityNameText, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text(universityNameText, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     }
                     Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             modifier = Modifier
-                                .size(70.dp)
+                                .size(64.dp)
                                 .clip(CircleShape)
                                 .background(placeholderColor),
                             contentAlignment = Alignment.Center
@@ -443,7 +417,7 @@ fun StudentDashboardScreen(
                                     imageVector = Icons.Default.Person,
                                     contentDescription = "Default Profile",
                                     tint = secondaryTextColor,
-                                    modifier = Modifier.size(36.dp)
+                                    modifier = Modifier.size(32.dp)
                                 )
                             }
                         }
@@ -454,15 +428,15 @@ fun StudentDashboardScreen(
                             Text(
                                 text = fullName,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
+                                fontSize = 15.sp,
                                 color = textColor,
                                 overflow = TextOverflow.Ellipsis
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = studentIdNumber,
+                                text = studentIdNumber.ifEmpty { myStudentId },
                                 color = secondaryTextColor,
-                                fontSize = 14.sp,
+                                fontSize = 13.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -470,7 +444,7 @@ fun StudentDashboardScreen(
                             Text(
                                 text = courseName,
                                 color = secondaryTextColor,
-                                fontSize = 13.sp,
+                                fontSize = 12.sp,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
@@ -482,23 +456,32 @@ fun StudentDashboardScreen(
                             .padding(6.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(studentIdTitle, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text(studentIdTitle, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(24.dp))
             Text(quickAccessTitle, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = textColor)
             Spacer(modifier = Modifier.height(12.dp))
 
-            // --- BAHAGIAN AKSES PANTAS ---
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                QuickAccessItem(title = workshopListLabel, icon = Icons.Default.List, color = Color(0xFF912323), textColor = textColor, onClick = onWorkshopListClick)
-                QuickAccessItem(title = certificateLabel, icon = Icons.Default.WorkspacePremium, color = Color(0xFF912323), textColor = textColor, onClick = onCertificateClick)
-                QuickAccessItem(title = historyLabel, icon = Icons.Default.History, color = Color(0xFF912323), textColor = textColor, onClick = onHistoryClick)
+            // --- BAHAGIAN AKSES PANTAS (Kotak Merah Penuh, Ikon Putih) ---
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    QuickAccessCard(title = workshopListLabel, icon = Icons.Default.List, textColor = textColor, onClick = onWorkshopListClick)
+                }
+                Box(modifier = Modifier.weight(1f)) {
+                    QuickAccessCard(title = certificateLabel, icon = Icons.Default.WorkspacePremium, textColor = textColor, onClick = onCertificateClick)
+                }
+                Box(modifier = Modifier.weight(1f)) {
+                    QuickAccessCard(title = historyLabel, icon = Icons.Default.History, textColor = textColor, onClick = onHistoryClick)
+                }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(24.dp))
             Text(highlightTitle, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = textColor)
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -507,7 +490,7 @@ fun StudentDashboardScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onWorkshopListClick() },
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF0D1B2A)),
                 elevation = CardDefaults.cardElevation(2.dp)
             ) {
@@ -515,13 +498,13 @@ fun StudentDashboardScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     if (hasUpcomingEvent) {
                         Text(
                             text = upcomingEventTitle,
                             color = Color.White,
-                            fontSize = 18.sp,
+                            fontSize = 17.sp,
                             fontWeight = FontWeight.Bold
                         )
                         if (upcomingEventDesc.isNotEmpty()) {
@@ -545,7 +528,7 @@ fun StudentDashboardScreen(
                             Text(
                                 text = noUpcomingText,
                                 color = Color.LightGray,
-                                fontSize = 14.sp
+                                fontSize = 13.sp
                             )
                         }
                     }
@@ -556,17 +539,48 @@ fun StudentDashboardScreen(
 }
 
 @Composable
-fun QuickAccessItem(title: String, icon: ImageVector, color: Color, textColor: Color, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        IconButton(
+fun QuickAccessCard(
+    title: String,
+    icon: ImageVector,
+    textColor: Color,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Card(
             onClick = onClick,
             modifier = Modifier
-                .size(60.dp)
-                .background(color, RoundedCornerShape(12.dp))
+                .fillMaxWidth()
+                .height(72.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF912323)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
         ) {
-            Icon(icon, contentDescription = title, tint = Color.White)
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = title,
+                    tint = Color.White,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
         }
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = textColor)
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = title,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = textColor,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }

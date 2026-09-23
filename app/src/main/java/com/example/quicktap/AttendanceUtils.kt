@@ -13,10 +13,6 @@ data class LiveStudentRow(
 
 object AttendanceUtils {
 
-    /**
-     * Menyelesaikan dan mendapatkan nama pelajar yang sah daripada dokumen Firestore.
-     * Mengelakkan paparan ID Firestore, UID hexadecimal kad NFC, atau string kosong.
-     */
     fun resolveStudentName(doc: DocumentSnapshot, fallbackId: String = "Student"): String {
         val rawName = doc.getString("studentName")
             ?: doc.getString("fullName")
@@ -24,9 +20,8 @@ object AttendanceUtils {
             ?: doc.getString("userName")
             ?: fallbackId
 
-        // A valid name shouldn't be just a hex string of length 8, 14, 16 etc (NFC UIDs)
-        val isHexId = rawName.matches(Regex("^[A-Fa-f0-9]{8,}$")) || 
-                     rawName.matches(Regex("^[A-Fa-f0-9]{14,}$"))
+        val isHexId = rawName.matches(Regex("^[A-Fa-f0-9]{8,}$")) ||
+                rawName.matches(Regex("^[A-Fa-f0-9]{14,}$"))
 
         val isInvalidName = rawName.isBlank() ||
                 rawName == fallbackId ||
@@ -36,9 +31,6 @@ object AttendanceUtils {
         return if (!isInvalidName) rawName else fallbackId
     }
 
-    /**
-     * Menentukan sama ada pelajar telah melengkapkan kehadiran (check-in & check-out)
-     */
     fun isEligibleForCertificate(regDoc: DocumentSnapshot): Boolean {
         val hasCheckedIn = hasNfcCheckIn(regDoc)
         val hasCheckedOut = hasNfcCheckOut(regDoc)
@@ -48,31 +40,28 @@ object AttendanceUtils {
     }
 
     /**
-     * SYARAT KETAT NFC CHECK-IN:
-     * Hanya sah jika wujud field timestamp/checkInTimestamp ATAU status diset kepada PRESENT.
-     * Status "REGISTERED" sahaja DIANGGAP BELUM TAP NFC.
+     * Syarat check-in diselaraskan agar menyokong pelbagai variasi medan Firestore
+     * (checkInTimestamp, checkInTime, timestamp umum, atau mode Check-In)
      */
     fun hasNfcCheckIn(doc: DocumentSnapshot): Boolean {
-        val status = doc.getString("status") ?: ""
-        val hasTimestamp = doc.get("timestamp") != null || doc.get("checkInTimestamp") != null
+        val hasTimeField = doc.get("checkInTimestamp") != null ||
+                doc.get("checkInTime") != null ||
+                doc.get("timestamp") != null
+        val mode = doc.getString("mode")
 
-        // Mesti ada timestamp sebenar atau status PRESENT (bukan sekadar REGISTERED kosong)
-        return hasTimestamp || status == "PRESENT"
+        return hasTimeField || mode == "Check-In" || mode == "present"
     }
 
     /**
-     * SYARAT KETAT NFC CHECK-OUT:
-     * Hanya sah jika wujud rekod masa keluar.
+     * Syarat check-out diselaraskan untuk mengesan sebarang medan masa keluar yang wujud
      */
     fun hasNfcCheckOut(doc: DocumentSnapshot): Boolean {
         return doc.get("checkOutTime") != null ||
                 doc.get("checkOutTimestamp") != null ||
-                doc.get("timeout") != null
+                doc.get("timeout") != null ||
+                doc.getString("mode") == "Check-Out"
     }
 
-    /**
-     * Memformat objek masa Firebase Timestamp kepada bentuk jam (contoh: 02:30 PM).
-     */
     fun formatTimestamp(timestampObj: Any?): String {
         if (timestampObj == null) return "-"
         return try {
@@ -83,6 +72,9 @@ object AttendanceUtils {
                 }
                 is java.util.Date -> {
                     SimpleDateFormat("hh:mm a", Locale.getDefault()).format(timestampObj)
+                }
+                is String -> {
+                    if (timestampObj.isNotBlank()) timestampObj else "-"
                 }
                 else -> "-"
             }

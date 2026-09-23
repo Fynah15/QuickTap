@@ -26,11 +26,13 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import com.google.firebase.auth.FirebaseAuth
 import com.example.quicktap.R
+import com.example.quicktap.AppSettingsState
 
 @Composable
 fun StaffLoginScreen(
     onLoginSuccess: () -> Unit,
     onSignUpClick: () -> Unit,
+    onForgotPasswordClick: () -> Unit,
     onBackClick: () -> Unit
 ) {
     val auth = FirebaseAuth.getInstance()
@@ -42,6 +44,8 @@ fun StaffLoginScreen(
     var isLoading by remember { mutableStateOf(false) }
 
     val scrollState = rememberScrollState()
+    val currentLang = AppSettingsState.currentLanguage
+    val forgotPasswordText = if (currentLang == "ms") "Lupa Kata Laluan?" else "Forgot Password?"
 
     Box(
         modifier = Modifier
@@ -110,7 +114,23 @@ fun StaffLoginScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(8.dp)
             )
-            Spacer(modifier = Modifier.height(24.dp))
+
+            // Forgot Password Button aligned to the right
+            Spacer(modifier = Modifier.height(8.dp))
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Text(
+                    text = forgotPasswordText,
+                    color = Color.White,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp,
+                    modifier = Modifier.clickable { onForgotPasswordClick() }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
 
             Button(
                 onClick = {

@@ -16,10 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestore
-import java.text.SimpleDateFormat
-import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,6 +29,8 @@ fun LiveAttendanceScreen(
 
     var studentList by remember { mutableStateOf(listOf<LiveStudentRow>()) }
     var totalRegisteredCount by remember { mutableIntStateOf(0) }
+    var presentCount by remember { mutableIntStateOf(0) }
+    var absentCount by remember { mutableIntStateOf(0) }
     var workshopTitleName by remember { mutableStateOf("Live Attendance") }
 
     val currentLang = AppSettingsState.currentLanguage
@@ -56,17 +55,15 @@ fun LiveAttendanceScreen(
     val presentCardColor = if (isDark) Color(0xFF2E6930) else Color(0xFF81C784)
     val absentCardColor = if (isDark) Color(0xFF783131) else Color(0xFFE57373)
 
-    val parseTimestampToTime: (Any?) -> String = { rawValue ->
-        try {
-            when (rawValue) {
-                is Timestamp -> {
-                    SimpleDateFormat("hh:mm a", Locale.getDefault()).format(rawValue.toDate())
-                }
-                else -> "-"
-            }
-        } catch (_: Exception) {
-            "-"
-        }
+    val updateState: (List<LiveStudentRow>) -> Unit = { allRows ->
+        val uniqueStudents = allRows.distinctBy { it.studentKey }
+
+        totalRegisteredCount = uniqueStudents.size
+        presentCount = uniqueStudents.count { it.checkIn != "-" }
+        absentCount = uniqueStudents.count { it.checkIn == "-" }
+
+        // Paparkan hanya pelajar yang sudah check-in di dalam senarai live
+        studentList = uniqueStudents.filter { it.checkIn != "-" }.sortedBy { it.name }
     }
 
     DisposableEffect(workshopId) {
@@ -85,71 +82,67 @@ fun LiveAttendanceScreen(
             .whereEqualTo("workshopId", workshopId)
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null) return@addSnapshotListener
-                totalRegisteredCount = snapshot.size()
 
                 val studentMap = mutableMapOf<String, LiveStudentRow>()
 
                 for (doc in snapshot.documents) {
-                    val timestampField = doc.get("timestamp")
-                    val checkOutTimeField = doc.get("checkOutTime")
+                    val studentId = doc.getString("studentId")
+                        ?: doc.getString("userId")
+                        ?: doc.id.substringAfter("_", doc.id)
 
-                    val formattedCheckIn = parseTimestampToTime(timestampField)
-                    val formattedCheckOut = parseTimestampToTime(checkOutTimeField)
+                    // Menyokong semua variasi medan masa check-in dan check-out
+                    val rawCheckIn = doc.get("timestamp")
+                        ?: doc.get("checkInTimestamp")
+                        ?: doc.get("checkInTime")
+                        ?: doc.get("timeIn")
+                        ?: doc.get("checkIn")
+                        ?: doc.get("time")
 
-                    if (formattedCheckIn == "-" && formattedCheckOut == "-") {
-                        continue
+                    val rawCheckOut = doc.get("checkOutTime")
+                        ?: doc.get("checkOutTimestamp")
+                        ?: doc.get("timeout")
+                        ?: doc.get("timeOut")
+                        ?: doc.get("checkOut")
+
+                    val formattedCheckIn = AttendanceUtils.formatTimestamp(rawCheckIn)
+                    val formattedCheckOut = AttendanceUtils.formatTimestamp(rawCheckOut)
+                    val resolvedName = AttendanceUtils.resolveStudentName(doc, "Memuatkan nama...")
+
+                    val mapKey = if (studentId.isNotBlank()) studentId else resolvedName.trim().lowercase()
+
+                    val existingRow = studentMap[mapKey]
+                    val finalCheckIn = if (formattedCheckIn != "-") formattedCheckIn else (existingRow?.checkIn ?: "-")
+                    val finalCheckOut = if (formattedCheckOut != "-") formattedCheckOut else (existingRow?.checkOut ?: "-")
+
+                    val finalName = when {
+                        resolvedName.isNotBlank() && resolvedName != "Memuatkan nama..." -> resolvedName
+                        existingRow != null && existingRow.name.isNotBlank() && existingRow.name != "Memuatkan nama..." -> existingRow.name
+                        else -> "Memuatkan nama..."
                     }
 
-                    val rawStudentName = doc.getString("studentName")
-                        ?: doc.getString("name")
-                        ?: doc.getString("fullName")
-                        ?: doc.getString("userName")
+                    studentMap[mapKey] = LiveStudentRow(
+                        studentKey = mapKey,
+                        name = finalName,
+                        checkIn = finalCheckIn,
+                        checkOut = finalCheckOut
+                    )
 
-                    val studentId = doc.getString("studentId") ?: doc.getString("userId") ?: doc.id.substringAfter("_")
-
-                    val isInvalidName = rawStudentName.isNullOrBlank() ||
-                            rawStudentName.length > 20 && rawStudentName.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' || it == '-' } ||
-                            rawStudentName == studentId
-
-                    val finalDisplayName = if (!isInvalidName) rawStudentName!! else "Memuatkan nama..."
-
-                    if ((isInvalidName || finalDisplayName == "Memuatkan nama...") && studentId.isNotBlank()) {
+                    if (finalName == "Memuatkan nama..." && studentId.isNotBlank()) {
                         firestore.collection("users").document(studentId).get()
                             .addOnSuccessListener { userDoc ->
                                 if (userDoc.exists()) {
-                                    val realName = userDoc.getString("name")
-                                        ?: userDoc.getString("fullName")
-                                        ?: userDoc.getString("studentName")
-                                        ?: userDoc.getString("nickname")
-
-                                    if (!realName.isNullOrBlank()) {
-                                        studentMap[studentId]?.let { row ->
+                                    val realName = AttendanceUtils.resolveStudentName(userDoc, "")
+                                    if (realName.isNotBlank()) {
+                                        studentMap[mapKey]?.let { row ->
                                             row.name = realName
-                                            studentList = studentMap.values.toList().sortedBy { it.name }
+                                            updateState(studentMap.values.toList())
                                         }
                                     }
                                 }
                             }
                     }
-
-                    if (studentMap.containsKey(studentId)) {
-                        val existing = studentMap[studentId]!!
-                        if (formattedCheckIn != "-") existing.checkIn = formattedCheckIn
-                        if (formattedCheckOut != "-") existing.checkOut = formattedCheckOut
-                        if (!isInvalidName) {
-                            existing.name = finalDisplayName
-                        }
-                    } else {
-                        studentMap[studentId] = LiveStudentRow(
-                            studentKey = studentId,
-                            name = finalDisplayName,
-                            checkIn = formattedCheckIn,
-                            checkOut = formattedCheckOut
-                        )
-                    }
                 }
-
-                studentList = studentMap.values.toList().sortedBy { it.name }
+                updateState(studentMap.values.toList())
             }
 
         onDispose {
@@ -158,8 +151,6 @@ fun LiveAttendanceScreen(
         }
     }
 
-    val presentCount = studentList.size
-    val absentCount = if (totalRegisteredCount >= presentCount) totalRegisteredCount - presentCount else 0
     val attendancePercentage = if (totalRegisteredCount > 0) (presentCount * 100) / totalRegisteredCount else 0
 
     Scaffold(
@@ -231,7 +222,7 @@ fun LiveAttendanceScreen(
                         }
                     } else {
                         LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                            items(studentList) { student ->
+                            items(studentList, key = { it.studentKey }) { student ->
                                 Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Text(student.name, modifier = Modifier.weight(1.5f), fontSize = 12.sp, fontWeight = FontWeight.Medium, color = textColor)
                                     Text(student.checkIn, modifier = Modifier.weight(1f), textAlign = TextAlign.Center, fontSize = 12.sp, color = secondaryTextColor)

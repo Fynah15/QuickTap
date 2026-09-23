@@ -1,4 +1,4 @@
-package com.example.quicktap.service
+package com.example.quicktap
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,17 +7,14 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
-import com.example.quicktap.MainActivity
 
 class LocalNotificationService {
-
     companion object {
         private const val CHANNEL_ID = "quicktap_reminder_channel"
 
         fun showLocalNotification(context: Context, title: String, message: String) {
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-            // 1. Cipta Notification Channel (Wajib untuk Android 8.0 / Oreo ke atas)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val channel = NotificationChannel(
                     CHANNEL_ID,
@@ -31,10 +28,8 @@ class LocalNotificationService {
                 notificationManager.createNotificationChannel(channel)
             }
 
-            // 2. Sediakan Intent apabila notifikasi disentuh
-            val intent = Intent(context, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-            }
+            val intent = Intent(context, MainActivity::class.java)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
 
             val pendingIntentFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -44,17 +39,14 @@ class LocalNotificationService {
 
             val pendingIntent = PendingIntent.getActivity(context, 0, intent, pendingIntentFlag)
 
-            // 3. Bina paparan notifikasi
-            val notificationBuilder = NotificationCompat.Builder(context, CHANNEL_ID).apply {
-                setSmallIcon(android.R.drawable.ic_dialog_info)
-                setContentTitle(title)
-                setContentText(message)
-                setAutoCancel(true)
-                setContentIntent(pendingIntent)
-                priority = NotificationCompat.PRIORITY_HIGH
-            }
+            val notificationBuilder = NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
 
-            // 4. Paparkan notifikasi
             val notificationId = System.currentTimeMillis().toInt()
             notificationManager.notify(notificationId, notificationBuilder.build())
         }

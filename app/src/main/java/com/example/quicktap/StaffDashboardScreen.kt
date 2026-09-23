@@ -18,14 +18,17 @@ import com.example.quicktap.AppSettingsState
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
-import com.google.firebase.firestore.Query
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StaffDashboardScreen(
     onAttendanceModeClick: () -> Unit,
     onSelectWorkshopClick: () -> Unit,
-    onViewAnalyticsClick: () -> Unit,
+    onViewAnalyticsClick: (String) -> Unit,
     onReportClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onCertificateManagementClick: () -> Unit
@@ -34,27 +37,18 @@ fun StaffDashboardScreen(
     val auth = remember { FirebaseAuth.getInstance() }
     val currentUser = auth.currentUser
 
-    // State untuk data profil staf
     var staffName by remember { mutableStateOf("Staff") }
-
-    // State untuk data bengkel aktif secara real-time
     var activeWorkshopId by remember { mutableStateOf<String?>(null) }
-    var activeWorkshopName by remember { mutableStateOf("No Active Workshop") }
+    var activeWorkshopName by remember { mutableStateOf("No Active Workshop Today") }
 
-    // State untuk data statistik jumlah keseluruhan bengkel & kehadiran
     var totalWorkshopsCount by remember { mutableStateOf(0) }
-    var totalPresent by remember { mutableStateOf(0) }
-    var totalAbsent by remember { mutableStateOf(0) }
-    var attendancePercentage by remember { mutableStateOf(0f) }
+    var todayTotalPresent by remember { mutableStateOf(0) }
+    var todayTotalAbsent by remember { mutableStateOf(0) }
 
-    // State tambahan untuk metrik masa nyata Check-In & Check-Out
-    var totalCheckedIn by remember { mutableStateOf(0) }
-    var totalCheckedOut by remember { mutableStateOf(0) }
+    var activeWorkshopAttendancePercentage by remember { mutableStateOf(0f) }
 
-    // State dinamik untuk mengesan item navigasi bawah yang sedang dipilih
     var selectedNavigationIndex by remember { mutableStateOf(0) }
 
-    // 1. Sokongan Bahasa Dinamik
     val currentLang = AppSettingsState.currentLanguage
     val welcomeText = if (currentLang == "ms") "Selamat datang, $staffName!" else "Welcome, $staffName!"
     val homeNav = if (currentLang == "ms") "Utama" else "Home"
@@ -75,14 +69,11 @@ fun StaffDashboardScreen(
     val reportsBtn = if (currentLang == "ms") "Laporan" else "Reports"
 
     val liveAttendanceTitle = if (currentLang == "ms") "Gambaran Keseluruhan Kehadiran Langsung" else "Live Attendance Overview"
-    val noActiveWorkshopText = if (currentLang == "ms") "Tiada Bengkel Aktif" else "No Active Workshop"
+    val noActiveWorkshopText = if (currentLang == "ms") "Tiada Bengkel Aktif Hari Ini" else "No Active Workshop Today"
 
-    val liveCheckInLabel = if (currentLang == "ms") "Daftar Masuk: " else "Check-In: "
-    val liveCheckOutLabel = if (currentLang == "ms") "Daftar Keluar: " else "Check-Out: "
     val liveSyncText = if (currentLang == "ms") "Segerak kehadiran langsung aktif" else "Live attendance sync actively"
     val viewAnalyticsBtnText = if (currentLang == "ms") "Lihat Analitis Terperinci" else "View Detailed Analytics"
 
-    // 2. Sokongan Tema Gelap / Cerah (Dark / Light Mode)
     val isDark = AppSettingsState.isDarkMode
     val backgroundColor = if (isDark) Color(0xFF121212) else Color(0xFFF9F9F9)
     val cardContainerColor = if (isDark) Color(0xFF1E1E1E) else Color.White
@@ -92,24 +83,20 @@ fun StaffDashboardScreen(
     val presentBoxBg = if (isDark) Color(0xFF1E3A24) else Color(0xFFE2F5E1)
     val absentBoxBg = if (isDark) Color(0xFF4A2222) else Color(0xFFFDEAEA)
 
-    // Dapatkan jumlah keseluruhan bengkel secara Real-Time dari koleksi "workshops"
     DisposableEffect(Unit) {
         val allWorkshopsListener = firestore.collection("workshops")
-            .addSnapshotListener { snapshot, error ->
-                if (error == null && snapshot != null) {
+            .addSnapshotListener { snapshot, _ ->
+                if (snapshot != null) {
                     totalWorkshopsCount = snapshot.size()
                 }
             }
-        onDispose {
-            allWorkshopsListener.remove()
-        }
+        onDispose { allWorkshopsListener.remove() }
     }
 
-    // Muat turun data bengkel TERKINI (Latest workshop) secara Real-Time dari Firestore
     DisposableEffect(currentUser) {
-        var registrationsListener: ListenerRegistration? = null
+        var activeWorkshopRegListener: ListenerRegistration? = null
+        var allTodayRegListener: ListenerRegistration? = null
 
-        // Ambil nama staf
         currentUser?.uid?.let { uid ->
             firestore.collection("users").document(uid).get().addOnSuccessListener { doc ->
                 if (doc.exists()) {
@@ -118,85 +105,196 @@ fun StaffDashboardScreen(
             }
         }
 
-        val processWorkshopDocument: (com.google.firebase.firestore.DocumentSnapshot) -> Unit = { workshopDoc ->
-            val workshopId = workshopDoc.id
-            activeWorkshopId = workshopId
+        val dateFormatStandard = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val dateFormatAlternate = SimpleDateFormat("yyyy-M-d", Locale.getDefault())
+        val dateFormatSlash = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+        val currentDate = Date()
+        val todayStandard = dateFormatStandard.format(currentDate)
+        val todayAlternate = dateFormatAlternate.format(currentDate)
+        val todaySlash = dateFormatSlash.format(currentDate)
 
-            // Ambil tajuk sebenar bengkel secara dinamik
-            val fetchedName = workshopDoc.getString("title") ?: workshopDoc.getString("name")
-            activeWorkshopName = if (!fetchedName.isNullOrBlank()) fetchedName else noActiveWorkshopText
+        val workshopListener = firestore.collection("workshops")
+            .addSnapshotListener { snapshot, _ ->
+                if (snapshot != null && snapshot.documents.isNotEmpty()) {
 
-            registrationsListener?.remove()
+                    val todayWorkshops = snapshot.documents.filter { doc ->
+                        val dateField = doc.getString("date")
+                            ?: doc.getString("workshopDate")
+                            ?: doc.getString("tarikh")
+                            ?: ""
 
-            // Dapatkan pendaftaran & kehadiran untuk bengkel aktif ini
-            registrationsListener = firestore.collection("registrations")
-                .whereEqualTo("workshopId", workshopId)
-                .addSnapshotListener { regSnapshots, regError ->
-                    if (regError != null || regSnapshots == null) return@addSnapshotListener
-
-                    val total = regSnapshots.size()
-                    var presentCount = 0
-                    var absentCount = 0
-                    var checkInCount = 0
-                    var checkOutCount = 0
-
-                    for (doc in regSnapshots.documents) {
-                        val status = doc.getString("status") ?: "ABSENT"
-                        if (status == "PRESENT" || status == "VERIFIED") {
-                            presentCount++
-                        } else {
-                            absentCount++
-                        }
-
-                        val checkInTimestamp = doc.get("checkInTimestamp")
-                        val checkOutTimestamp = doc.get("checkOutTimestamp")
-
-                        if (checkInTimestamp != null) checkInCount++
-                        if (checkOutTimestamp != null) checkOutCount++
+                        dateField.trim() == todayStandard ||
+                                dateField.trim() == todayAlternate ||
+                                dateField.trim() == todaySlash
                     }
 
-                    totalPresent = presentCount
-                    totalAbsent = absentCount
-                    totalCheckedIn = checkInCount
-                    totalCheckedOut = checkOutCount
-                    attendancePercentage = if (total > 0) (presentCount.toFloat() / total.toFloat()) else 0f
-                }
-        }
+                    val todayWorkshopIds = todayWorkshops.map { it.id }
 
-        // Mendengar perubahan koleksi "workshops" dengan menyusun mengikut tarikh terkini di atas
-        val workshopQuery = firestore.collection("workshops")
-            .orderBy("date", Query.Direction.DESCENDING)
-            .limit(1)
+                    allTodayRegListener?.remove()
+                    if (todayWorkshopIds.isNotEmpty()) {
+                        allTodayRegListener = firestore.collection("registrations")
+                            .whereIn("workshopId", todayWorkshopIds)
+                            .addSnapshotListener { regSnapshots, _ ->
+                                if (regSnapshots != null) {
+                                    val uniqueRegistrations = mutableMapOf<String, Map<String, Any>>()
 
-        val workshopListener = workshopQuery.addSnapshotListener { workshopSnapshots, workshopError ->
-            if (workshopError == null && workshopSnapshots != null && !workshopSnapshots.isEmpty) {
-                processWorkshopDocument(workshopSnapshots.documents.first())
-            } else {
-                // Fallback jika susunan tarikh gagal
-                firestore.collection("workshops").limit(1).get()
-                    .addOnSuccessListener { fallbackSnapshots ->
-                        if (!fallbackSnapshots.isEmpty) {
-                            processWorkshopDocument(fallbackSnapshots.documents.first())
+                                    for (doc in regSnapshots.documents) {
+                                        val data = doc.data ?: continue
+                                        val workshopId = data["workshopId"]?.toString() ?: continue
+                                        val studentId = data["studentId"]?.toString()
+                                            ?: data["userId"]?.toString()
+                                            ?: data["email"]?.toString()
+                                            ?: continue
+
+                                        val compositeKey = "${workshopId}_$studentId"
+                                        uniqueRegistrations[compositeKey] = data
+                                    }
+
+                                    var presentCount = 0
+                                    var absentCount = 0
+
+                                    // --- KEMASKINI LOGIK: Mesti ada timestamp / check-in yang sah baru dikira Present ---
+                                    for ((_, data) in uniqueRegistrations) {
+                                        val checkIn = data["timestamp"]
+                                            ?: data["checkInTimestamp"]
+                                            ?: data["checkInTime"]
+                                            ?: data["status"]
+
+                                        val hasCheckedIn = checkIn != null &&
+                                                checkIn.toString().trim() != "-" &&
+                                                checkIn.toString().trim().isNotBlank() &&
+                                                !checkIn.toString().equals("Absent", ignoreCase = true) &&
+                                                !checkIn.toString().equals("Not Checked In", ignoreCase = true) &&
+                                                !checkIn.toString().equals("Belum Hadir", ignoreCase = true)
+
+                                        val isExplicitlyPresent = checkIn.toString().equals("Present", ignoreCase = true)
+                                                || checkIn.toString().equals("Hadir", ignoreCase = true)
+
+                                        if (hasCheckedIn || isExplicitlyPresent) {
+                                            presentCount++
+                                        } else {
+                                            absentCount++
+                                        }
+                                    }
+
+                                    todayTotalPresent = presentCount
+                                    todayTotalAbsent = absentCount
+                                }
+                            }
+                    } else {
+                        todayTotalPresent = 0
+                        todayTotalAbsent = 0
+                    }
+
+                    if (todayWorkshops.isNotEmpty()) {
+                        val currentTimeCal = Calendar.getInstance()
+                        val currentMinutes = currentTimeCal.get(Calendar.HOUR_OF_DAY) * 60 + currentTimeCal.get(Calendar.MINUTE)
+
+                        fun parseTimeToMinutes(timeStr: String): Int {
+                            val cleanStr = timeStr.trim().uppercase()
+                            val formats = listOf(
+                                SimpleDateFormat("HH:mm", Locale.getDefault()),
+                                SimpleDateFormat("H:mm", Locale.getDefault()),
+                                SimpleDateFormat("hh:mm a", Locale.getDefault()),
+                                SimpleDateFormat("h:mm a", Locale.getDefault())
+                            )
+                            for (sdf in formats) {
+                                try {
+                                    sdf.isLenient = false
+                                    val date = sdf.parse(cleanStr)
+                                    if (date != null) {
+                                        val cal = Calendar.getInstance().apply { time = date }
+                                        return cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                            return 0
+                        }
+
+                        val sortedTodayWorkshops = todayWorkshops.sortedBy { doc ->
+                            val timeStr = doc.getString("time") ?: "00:00"
+                            parseTimeToMinutes(timeStr)
+                        }
+
+                        val activeOrNextDoc = sortedTodayWorkshops.firstOrNull { doc ->
+                            val timeStr = doc.getString("time") ?: "00:00"
+                            val startMinutes = parseTimeToMinutes(timeStr)
+                            currentMinutes <= (startMinutes + 120)
+                        } ?: sortedTodayWorkshops.lastOrNull()
+
+                        if (activeOrNextDoc != null) {
+                            val workshopId = activeOrNextDoc.id
+                            activeWorkshopId = workshopId
+
+                            val fetchedName = activeOrNextDoc.getString("title")
+                                ?: activeOrNextDoc.getString("name")
+                                ?: activeOrNextDoc.getString("workshopName")
+                                ?: noActiveWorkshopText
+
+                            activeWorkshopName = if (!fetchedName.isNullOrBlank()) fetchedName else noActiveWorkshopText
+
+                            activeWorkshopRegListener?.remove()
+                            activeWorkshopRegListener = firestore.collection("registrations")
+                                .whereEqualTo("workshopId", workshopId)
+                                .addSnapshotListener { regSnapshots, _ ->
+                                    if (regSnapshots == null) return@addSnapshotListener
+
+                                    val studentMap = mutableMapOf<String, MutableMap<String, Any>>()
+                                    for (doc in regSnapshots.documents) {
+                                        val studentKey = doc.getString("studentId")
+                                            ?: doc.getString("userId")
+                                            ?: doc.getString("email")
+                                            ?: doc.id
+                                        val existingData = studentMap.getOrPut(studentKey) { mutableMapOf() }
+                                        doc.data?.let { existingData.putAll(it) }
+                                    }
+
+                                    val totalRegistered = studentMap.size
+                                    var activePresentCount = 0
+
+                                    // --- KEMASKINI LOGIK: Mengira peratusan berdasarkan yang sudah check-in sahaja ---
+                                    for ((_, data) in studentMap) {
+                                        val checkInTimestamp = data["timestamp"]
+                                            ?: data["checkInTimestamp"]
+                                            ?: data["checkInTime"]
+                                            ?: data["status"]
+
+                                        val hasCheckIn = checkInTimestamp != null &&
+                                                checkInTimestamp.toString().trim() != "-" &&
+                                                checkInTimestamp.toString().trim().isNotBlank() &&
+                                                !checkInTimestamp.toString().equals("Absent", ignoreCase = true) &&
+                                                !checkInTimestamp.toString().equals("Not Checked In", ignoreCase = true) &&
+                                                !checkInTimestamp.toString().equals("Belum Hadir", ignoreCase = true)
+
+                                        val isExplicitlyPresent = checkInTimestamp.toString().equals("Present", ignoreCase = true)
+                                                || checkInTimestamp.toString().equals("Hadir", ignoreCase = true)
+
+                                        if (hasCheckIn || isExplicitlyPresent) {
+                                            activePresentCount++
+                                        }
+                                    }
+
+                                    activeWorkshopAttendancePercentage = if (totalRegistered > 0) (activePresentCount.toFloat() / totalRegistered.toFloat()) else 0f
+                                }
                         } else {
                             activeWorkshopId = null
                             activeWorkshopName = noActiveWorkshopText
-                            totalPresent = 0
-                            totalAbsent = 0
-                            totalCheckedIn = 0
-                            totalCheckedOut = 0
-                            attendancePercentage = 0f
+                            activeWorkshopAttendancePercentage = 0f
+                            activeWorkshopRegListener?.remove()
                         }
-                    }
-                    .addOnFailureListener {
+                    } else {
                         activeWorkshopId = null
                         activeWorkshopName = noActiveWorkshopText
+                        activeWorkshopAttendancePercentage = 0f
+                        activeWorkshopRegListener?.remove()
                     }
+                }
             }
-        }
 
         onDispose {
             workshopListener.remove()
-            registrationsListener?.remove()
+            activeWorkshopRegListener?.remove()
+            allTodayRegListener?.remove()
         }
     }
 
@@ -219,7 +317,6 @@ fun StaffDashboardScreen(
         },
         bottomBar = {
             NavigationBar(containerColor = Color(0xFF912323)) {
-                // Home
                 NavigationBarItem(
                     selected = selectedNavigationIndex == 0,
                     onClick = { selectedNavigationIndex = 0 },
@@ -233,7 +330,6 @@ fun StaffDashboardScreen(
                         indicatorColor = Color(0xFF7A1D1D)
                     )
                 )
-                // Report
                 NavigationBarItem(
                     selected = selectedNavigationIndex == 1,
                     onClick = {
@@ -250,7 +346,6 @@ fun StaffDashboardScreen(
                         indicatorColor = Color(0xFF7A1D1D)
                     )
                 )
-                // Certificate
                 NavigationBarItem(
                     selected = selectedNavigationIndex == 2,
                     onClick = {
@@ -267,7 +362,6 @@ fun StaffDashboardScreen(
                         indicatorColor = Color(0xFF7A1D1D)
                     )
                 )
-                // Settings
                 NavigationBarItem(
                     selected = selectedNavigationIndex == 3,
                     onClick = {
@@ -300,7 +394,6 @@ fun StaffDashboardScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Total Workshop Card (Ditukar daripada Total Registered kepada Total Workshop)
                 Card(
                     modifier = Modifier.weight(1f).height(100.dp),
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF801A1A)),
@@ -325,7 +418,6 @@ fun StaffDashboardScreen(
                     }
                 }
 
-                // Attendance Today Card
                 Card(
                     modifier = Modifier.weight(1f).height(100.dp),
                     colors = CardDefaults.cardColors(containerColor = statsCardBg2),
@@ -346,17 +438,15 @@ fun StaffDashboardScreen(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            // Present Box
                             Box(modifier = Modifier.weight(1f).background(presentBoxBg, RoundedCornerShape(8.dp)).padding(4.dp), contentAlignment = Alignment.Center) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text(text = "$totalPresent", color = Color(0xFF4CAF50), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                    Text(text = "$todayTotalPresent", color = Color(0xFF4CAF50), fontSize = 20.sp, fontWeight = FontWeight.Bold)
                                     Text(text = presentLabel, color = Color(0xFF4CAF50), fontSize = 9.sp)
                                 }
                             }
-                            // Absent Box
                             Box(modifier = Modifier.weight(1f).background(absentBoxBg, RoundedCornerShape(8.dp)).padding(4.dp), contentAlignment = Alignment.Center) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text(text = "$totalAbsent", color = Color(0xFFF44336), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                    Text(text = "$todayTotalAbsent", color = Color(0xFFF44336), fontSize = 20.sp, fontWeight = FontWeight.Bold)
                                     Text(text = absentLabel, color = Color(0xFFF44336), fontSize = 9.sp)
                                 }
                             }
@@ -365,7 +455,6 @@ fun StaffDashboardScreen(
                 }
             }
 
-            // --- SECTION: QUICK ACCESS ---
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = cardContainerColor),
@@ -387,7 +476,6 @@ fun StaffDashboardScreen(
                 }
             }
 
-            // --- SECTION: LIVE ATTENDANCE OVERVIEW ---
             Text(liveAttendanceTitle, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = textColor)
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -402,13 +490,13 @@ fun StaffDashboardScreen(
                     Box(
                         modifier = Modifier.size(70.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(
-                            progress = { attendancePercentage },
+                            progress = { activeWorkshopAttendancePercentage },
                             modifier = Modifier.fillMaxSize(),
                             color = Color(0xFF4CAF50),
                             strokeWidth = 6.dp,
                             trackColor = if (isDark) Color(0xFF333333) else Color(0xFFE0E0E0)
                         )
-                        val displayPercentage = (attendancePercentage * 100).toInt()
+                        val displayPercentage = (activeWorkshopAttendancePercentage * 100).toInt()
                         Text(text = "$displayPercentage%", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = textColor)
                     }
                     Spacer(modifier = Modifier.width(16.dp))
@@ -422,14 +510,16 @@ fun StaffDashboardScreen(
                             overflow = TextOverflow.Ellipsis
                         )
 
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(text = "$liveCheckInLabel$totalCheckedIn | $liveCheckOutLabel$totalCheckedOut", color = Color(0xFF4A90E2), fontSize = 11.sp, fontWeight = FontWeight.Medium)
-
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(text = liveSyncText, color = secondaryTextColor, fontSize = 10.sp)
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
 
                         Button(
-                            onClick = onViewAnalyticsClick,
+                            onClick = {
+                                activeWorkshopId?.let { id ->
+                                    onViewAnalyticsClick(id)
+                                }
+                            },
                             enabled = activeWorkshopId != null,
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A90E2)),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
@@ -456,5 +546,6 @@ fun QuickAccessIconButton(title: String, icon: androidx.compose.ui.graphics.vect
         ) {
             Icon(icon, contentDescription = title, tint = Color.White, modifier = Modifier.size(24.dp))
         }
-    }
+
+      }
 }
